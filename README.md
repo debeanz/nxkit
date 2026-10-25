@@ -68,6 +68,10 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
 - **Memory recorder from env.txt** (iOS): `DM_MEMSTAT=memstat.tsv` in `Documents/env.txt` now starts
   nxnative's per-second memory breakdown (it used to start before env.txt was read); the file goes
   beside `log.txt`.
+- **Idle texture eviction** (testing, made for Luigi's Mansion 3): GPU copies of compressed textures on
+  GPU-only pools that nothing used for about 7 seconds are dropped and rebuilt from game memory when
+  needed again, so games that never free their textures don't run the iPhone out of memory.
+  `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off; the log line `idle texture eviction:` shows what it freed.
 
 ## Installing on the iPhone (from Windows)
 

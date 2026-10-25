@@ -1,0 +1,179 @@
+--- a/dm/gfx/nvn/nvn_mtl.m	2026-10-25 22:15:37.080839200 +0100
++++ b/dm/gfx/nvn/nvn_mtl.m	2026-10-25 22:17:51.990440400 +0100
+@@ -686,6 +686,7 @@
+     mtl_init(); g_sub_serial++; g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
+     defer_drain();
+     defer_reset();
++    { void tex_evict_idle_c(void); tex_evict_idle_c(); }   // nxkit: idle texture eviction (tex_evict_idle)
+     warm_claim();
+     if (g_cb) MDIE("submit re-entered");
+     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
+@@ -2053,7 +2054,9 @@
+     return r;
+ }
+ static id<MTLTexture> tex_mtl_(const tex_t *ct);
+-static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct); AP_E(4); return r; }
++static void evu_touch(id<MTLTexture> t);   // tex_evict_idle
++static void gpu_dst_add(id<MTLTexture> t);   // tex_evict_idle: a GPU copy / clear wrote it
++static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct); AP_E(4); if (r) evu_touch(r); return r; }
+ // A sparse texture is bound from its first level whose pages, and those of every smaller level, are all mapped: a view of levels [r, n) samples as with a minimum LOD of r.
+ // The translator drops TEX's LOD clamp and residency predicate, so Monster Hunter Rise's streamed textures were sampled at levels it had not mapped yet; those read 0, which ASTC
+ // decodes as its error colour (magenta clothes on the title screen). Single-layer 2D textures only; the view follows each upload, as the mappings change only with one
+@@ -3350,7 +3353,8 @@
+ typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; int view_pkg;   // view_pkg: CPU-written (packaged); only those depend on guest writes (view_dirty)
+                  void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type;   // alt: compatible view used when the shader's declared type differs from view (tex_fit), alt_of = the view it was built from
+                  void *ar, *ar_of; uint64_t ar_rid;                         // ar: the alpha-from-red view for the profile's alpha_from_red shaders (tex_alpha_red), ar_of = the view it was built from
+-                 void *im, *im_of; uint64_t im_rid; } treg_t;              // im: the view an image slot reads in the shader's pixel class (img_fit), im_of = the view it was built from
++                 void *im, *im_of; uint64_t im_rid;
++                 uint64_t used; } treg_t;                                   // used: g_sub_serial at the ID's last lookup (tex_evict_idle)              // im: the view an image slot reads in the shader's pixel class (img_fit), im_of = the view it was built from
+ static treg_t *g_treg; static int g_ntreg;
+ // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
+ // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
+@@ -3404,6 +3408,93 @@
+     s->k[i] = *k; s->view[i] = (void *)CFBridgingRetain(v); g_vc_new++;
+ }
+ void mtl_vc_drop(uint64_t ser) { os_unfair_lock_lock(&g_rmu); vc_set *s = nvn_hm_del(&g_vc, &ser); if (s) vc_set_free(s); os_unfair_lock_unlock(&g_rmu); }
++
++// ---------- Idle texture eviction (nxkit) ----------
++// A game that never finalizes its texture objects and reuses its memory for the next area (Luigi's Mansion 3: 0 finalized textures, 0 storage takeovers, the GPU side grew from 1.4 to
++// 2.9 GB until iOS closed the app) leaves every private Metal copy it ever made in the sharing table. Every 256 submissions the shared textures that can be rebuilt as they are drop that copy:
++// compressed formats (no render-target or shader-write usage), on a CPU_NO_ACCESS pool (the guest memory still holds what tex_init_fill read and the CPU cannot have changed it), never the
++// destination of a GPU copy or clear, not used by a texture ID or a texture-object lookup for DM_NVN_EVICT_IDLE submissions (default 1800, about 7 s at four a frame; 0 turns it off).
++// The next lookup rebuilds it on the slow path (tex_mtl_ -> tex_init_fill). Steps as mtl_alias_drop_pool, plus the serial table, the view caches of its serials and idle texture IDs' views
++static os_unfair_lock g_evu_mu = OS_UNFAIR_LOCK_INIT;
++static nvn_hmap g_evu = {.klen = 8};   // base texture pointer -> g_sub_serial + 1 at its last tex_mtl
++static CFMutableSetRef g_gpu_dst;      // base textures a GPU copy or clear wrote (non-owning)
++static uint64_t g_ev_n, g_ev_bytes, g_ev_passes;
++static __unsafe_unretained id<MTLTexture> ev_base(id<MTLTexture> t) { return t.parentTexture ? t.parentTexture : t; }
++static void evu_touch(id<MTLTexture> t) {
++    void *k = (__bridge void *)ev_base(t);
++    os_unfair_lock_lock(&g_evu_mu); nvn_hm_put(&g_evu, &k, (void *)(uintptr_t)(g_sub_serial + 1)); os_unfair_lock_unlock(&g_evu_mu);
++}
++static void gpu_dst_add(id<MTLTexture> t) {
++    if (!t) return;
++    os_unfair_lock_lock(&g_evu_mu); if (!g_gpu_dst) g_gpu_dst = CFSetCreateMutable(NULL, 0, NULL); CFSetAddValue(g_gpu_dst, (__bridge const void *)ev_base(t)); os_unfair_lock_unlock(&g_evu_mu);
++}
++static void ev_hot_add(CFMutableSetRef hot, void *v) { if (v) CFSetAddValue(hot, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
++static int ev_in(CFMutableSetRef set, void *v) { return v && CFSetContainsValue(set, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
++static void tex_evict_idle(void) {
++    static long idle = -1; if (idle < 0) { const char *e = getenv("DM_NVN_EVICT_IDLE"); idle = e ? atol(e) : 1800; if (idle > 0) MLOG("idle texture eviction: on (rebuildable textures unused for %ld submissions; DM_NVN_EVICT_IDLE=0 turns it off)", idle); }
++    if (idle <= 0 || g_sub_serial % 256 || g_sub_serial < (uint64_t)idle) return;
++    uint64_t now = g_sub_serial + 1;
++    os_unfair_lock_lock(&g_rmu);   // g_rmu before g_smu, as treg_drop_pool_views
++    CFMutableSetRef hot = CFSetCreateMutable(NULL, 0, NULL);
++    for (int i = 0; i < g_ntreg; i++) { treg_t *r = &g_treg[i]; if (!r->ok || now - r->used >= (uint64_t)idle) continue; ev_hot_add(hot, r->view); ev_hot_add(hot, r->alt); ev_hot_add(hot, r->ar); ev_hot_add(hot, r->im); }
++    pthread_mutex_lock(&g_smu);
++    enum { EV_MAX = 512 }; alias_key *ks = malloc(EV_MAX * sizeof *ks); void **vs = malloc(EV_MAX * sizeof *vs); uint32_t n = 0;
++    uint64_t kept_hot = 0, kept_rt = 0, kept_cpu = 0, kept_dst = 0, bytes = 0;
++    os_unfair_lock_lock(&g_evu_mu);
++    for (uint32_t i = 0; ks && vs && i < g_alias.cap && n < EV_MAX; i++) {
++        void *v = g_alias.vals[i]; if (!v) continue;
++        id<MTLTexture> o = (__bridge id<MTLTexture>)v;
++        alias_key k; memcpy(&k, g_alias.keys + (size_t)i * g_alias.klen, sizeof k);
++        const pool_t *pl = (const pool_t *)(uintptr_t)k.pool;
++        if (o.buffer || (o.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite))) { kept_rt += o.allocatedSize; continue; }
++        if (!pl || !(pl->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) || (pl->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL)) { kept_cpu += o.allocatedSize; continue; }
++        if (g_gpu_dst && CFSetContainsValue(g_gpu_dst, v)) { kept_dst += o.allocatedSize; continue; }
++        uint64_t last = (uint64_t)(uintptr_t)nvn_hm_get(&g_evu, &v);
++        if (CFSetContainsValue(hot, v) || (last && now - last < (uint64_t)idle) || serial_holds(&g_ghost, o)) { kept_hot += o.allocatedSize; continue; }
++        ks[n] = k; vs[n++] = v;
++    }
++    for (uint32_t j = 0; j < n; j++) nvn_hm_del(&g_evu, &vs[j]);
++    os_unfair_lock_unlock(&g_evu_mu);
++    if (n) {
++        CFMutableSetRef vic = CFSetCreateMutable(NULL, 0, NULL); for (uint32_t j = 0; j < n; j++) CFSetAddValue(vic, vs[j]);
++        uint32_t ns = 0, nscap = 256; uint64_t *sers = malloc(nscap * sizeof *sers);   // serials that resolve to a victim (collected first: deletion shifts entries)
++        for (uint32_t i = 0; sers && i < g_by_serial.cap; i++) {
++            if (!g_by_serial.vals[i] || !CFSetContainsValue(vic, g_by_serial.vals[i])) continue;
++            if (ns == nscap) { uint64_t *nsr = realloc(sers, (nscap *= 2) * sizeof *sers); if (!nsr) break; sers = nsr; }
++            memcpy(&sers[ns++], g_by_serial.keys + (size_t)i * g_by_serial.klen, 8);
++        }
++        for (uint32_t j = 0; sers && j < ns; j++) {
++            id old = hm_get_id(&g_by_serial, &sers[j]); if (old) { defer_obj_unref(old); hm_del_id(&g_by_serial, &sers[j]); }
++            vc_set *vcs = nvn_hm_del(&g_vc, &sers[j]); if (vcs) vc_set_free(vcs);
++        }
++        free(sers);
++        for (uint32_t j = 0; j < n; j++) {
++            void *old = nvn_hm_del(&g_alias, &ks[j]); if (!old) continue;
++            nvn_hm_del(&g_alias_seen, &ks[j]);
++            id<MTLTexture> o = CFBridgingRelease(old);
++            if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
++            bytes += o.allocatedSize;
++            defer_obj_release(o);
++        }
++        for (int i = 0; i < g_ntreg; i++) {   // idle texture IDs still holding a view of a victim: dropped, the next lookup rebuilds it
++            treg_t *r = &g_treg[i];
++            if (!ev_in(vic, r->view) && !ev_in(vic, r->alt) && !ev_in(vic, r->ar) && !ev_in(vic, r->im)) continue;
++            if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->view_id = r->view_rid = 0; }
++            if (r->alt) { defer_obj_unref((__bridge id)r->alt); CFRelease(r->alt); r->alt = r->alt_of = NULL; r->alt_rid = 0; }
++            treg_drop_ar(r);
++        }
++        CFRelease(vic);
++        g_ser_gen++; g_reg_gen++; g_ev_n += n; g_ev_bytes += bytes;
++    }
++    pthread_mutex_unlock(&g_smu);
++    os_unfair_lock_unlock(&g_rmu);
++    CFRelease(hot); free(ks); free(vs);
++    if (n && (g_ev_passes++ < 20 || g_ev_passes % 50 == 0))
++        MLOG("idle texture eviction: %u textures, %llu MB freed (%llu, %llu MB in total); kept: in use %llu MB, render target / image / linear %llu MB, CPU-visible pool %llu MB, GPU-written %llu MB",
++             n, (unsigned long long)(bytes >> 20), (unsigned long long)g_ev_n, (unsigned long long)(g_ev_bytes >> 20), (unsigned long long)(kept_hot >> 20), (unsigned long long)(kept_rt >> 20),
++             (unsigned long long)(kept_cpu >> 20), (unsigned long long)(kept_dst >> 20));
++}
++void tex_evict_idle_c(void) { tex_evict_idle(); }
+ void mtl_vc_stats(unsigned *n, uint64_t *hit, uint64_t *made) { os_unfair_lock_lock(&g_rmu); *n = g_vc.n; *hit = g_vc_hit; *made = g_vc_new; os_unfair_lock_unlock(&g_rmu); }
+ static void vc_drop_pool(const void *pool) {   // caller holds g_rmu
+     for (uint32_t i = 0; i < g_vc.cap;) {   // a deletion shifts later entries back into slot i: look at it again
+@@ -3517,7 +3608,7 @@
+ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
+     if (g_tpool_n && tid >= g_tpool_n) { if (!g_stat_tex_oob++) MLOG("texture ID %d outside the pool (capacity %d) treated as an empty slot: reads 0", tid, g_tpool_n); return nil; }
+     if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) { RED_ONCE(10, "texture ID %d not registered", tid); return nil; }
+-    treg_t *rp = &g_treg[tid];
++    treg_t *rp = &g_treg[tid]; rp->used = g_sub_serial;
+     uint64_t sg = g_ser_gen, dg = nvn_dirty_now();   // Take the generations first and then look up: if a change happens in between, the next time must take the slow path
+     if (rp->view && rp->view_ser == sg && (!rp->view_pkg || rp->view_dirty == dg)) return (__bridge id<MTLTexture>)rp->view;
+     id<MTLTexture> v = (__bridge id<MTLTexture>)rp->view;
+@@ -3599,7 +3690,7 @@
+ }
+ // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
+ static inline __attribute__((always_inline)) void *tex_fast(int tid) {
+-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) return g_treg[tid].view;
++    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) { g_treg[tid].used = g_sub_serial; return g_treg[tid].view; }
+     return (__bridge void *)tex_by_id(tid);
+ }
+ // The texture type the shader declares differs from the one the descriptor gives: use a compatible view. Maxwell sample instructions carry their own dimension, and a non-array instruction reading a 2D array texture reads layer 0;
+@@ -3731,7 +3822,7 @@
+     *rid = r->im_rid; return v;
+ }
+ static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
+-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
++    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) { g_treg[tid].used = g_sub_serial; if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
+     id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
+ }
+ static MTLSamplerAddressMode wrapm(int w) {
+@@ -7671,7 +7762,7 @@
+ }
+ static void copy_b2t(const p_copy_b2t *c) {
+     if (c->tex) zskip_del(c->tex->serial);
+-    id<MTLTexture> t = tex_mtl(c->tex);
++    id<MTLTexture> t = tex_mtl(c->tex); gpu_dst_add(t);
+     if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
+     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
+     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
+@@ -7796,7 +7887,7 @@
+         int ss = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, ds = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
+         if (zskip_has(c->src->serial, sl, ss)) zskip_add(c->dst->serial, dl, ds);
+     }
+-    id<MTLTexture> s = tex_mtl(c->src), d = tex_mtl(c->dst);
++    id<MTLTexture> s = tex_mtl(c->src), d = tex_mtl(c->dst); gpu_dst_add(d);
+     PD("T src=%llu dst=%llu %dx%dx%d→%dx%dx%d flags=%#x", c->src->serial, c->dst->serial, c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth, c->flags);
+     if (!s || !d) return;
+     unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
+@@ -7888,7 +7979,7 @@
+ static void clear_tex_tri(id<MTLTexture> t, unsigned lv, unsigned l0, const p_clear_tex *c);
+ static void clear_tex(const p_clear_tex *c) {
+     if (c->tex) zskip_del(c->tex->serial);
+-    id<MTLTexture> t = tex_mtl(c->tex);
++    id<MTLTexture> t = tex_mtl(c->tex); gpu_dst_add(t);
+     PD("X ser=%llu view format %#x region %d,%d,%d %dx%dx%d mask %#x %s %g,%g,%g,%g", c->tex->serial, c->has_view && c->view.set_format ? c->view.format : -1, c->r.xoffset, c->r.yoffset, c->r.zoffset, c->r.width, c->r.height, c->r.depth, c->mask,
+        c->is_uint ? "ui" : "f", c->is_uint ? (double)c->c.u[0] : c->c.f[0], c->is_uint ? (double)c->c.u[1] : c->c.f[1], c->is_uint ? (double)c->c.u[2] : c->c.f[2], c->is_uint ? (double)c->c.u[3] : c->c.f[3]);
+     if (!t) return;
