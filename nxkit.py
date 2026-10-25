@@ -247,10 +247,13 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
         if (game / n).exists(): shutil.copyfile(game / n, kit / 'game' / n)
     if icon: shutil.copyfile(icon, kit / 'game/icon.jpg')
     romfs = game / 'RomFS'
-    keep = [romfs / g.get('romfs_marker')]   # build_ipa.sh checks the RomFS by it
+    keep = []
     if gfx == 'vulkan':
         import vk_shaders
         keep += [Path(p) for p in vk_shaders.spirv_files(str(romfs))]   # what vk_shaders.py translates
+    marker = romfs / g.get('romfs_marker')   # build_ipa.sh only checks that it exists; a stub keeps the kit under GitHub's 2 GB asset limit (DARK SOULS' marker is a 3 GB archive), and the merge takes the real RomFS from the PC
+    if marker not in keep:
+        d = kit / 'game/RomFS' / marker.relative_to(romfs); d.parent.mkdir(parents=True, exist_ok=True); d.write_text('nxkit stub; the real file is merged on the PC\n')
     for p in keep:
         d = kit / 'game/RomFS' / p.relative_to(romfs); d.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(p, d)
     if gfx == 'nvn': shutil.copytree(work / 'shader/pkg', kit / 'shader/pkg')
