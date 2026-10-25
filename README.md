@@ -65,6 +65,9 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
   Zoom full screen). Touches on the game's touch screen follow the picture.
 - **zstd without the command** (PC shader split): Windows has no `zstd` command, so plain zstd files
   (Rhythm Heaven Groove's) are decompressed with Python's own zstd when it is missing.
+- **Memory recorder from env.txt** (iOS): `DM_MEMSTAT=memstat.tsv` in `Documents/env.txt` now starts
+  nxnative's per-second memory breakdown (it used to start before env.txt was read); the file goes
+  beside `log.txt`.
 
 ## Installing on the iPhone (from Windows)
 
