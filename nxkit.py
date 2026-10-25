@@ -173,16 +173,27 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
     g = gamemod.by_title(app)
     alias = None if g else B.same_build(nsp_dir, app, fam, keys, repo, env)
     if alias: g = alias[0]; B.say(f'no game profile for {app:016X}, but its main build is game profile {g.id}\'s {alias[1]} ({g.get("name", "")})')
-    if g is None: raise KitError(f'nxnative has no game profile for {app:016X}: only the games on its list can be built this way')
-    B.say(f'game profile: {g.id} ({g.get("name", "")})')
+    provisional = g is None
+    if provisional:   # as nxnative's main(): survey, then a provisional profile outside the repository (kept: a later run reuses it, and it can be edited by hand). No heap check (it needs a Mac)
+        pdir = nsp_dir / f'{app:016X}_build' / 'profile'
+        if (pdir / f'{app:016X}' / 'game.tsv').exists(): B.say(f'no game profile for {app:016X}: reusing the provisional profile from the last run (delete it to survey again)')
+        else:
+            facts = B.survey(nsp_dir, app, fam, keys, repo, py, env)
+            facts['survey'] = str(nsp_dir / f'{app:016X}_survey' / 'survey.md')
+            B.write_profile(pdir / f'{app:016X}', app, facts)
+        os.environ['DM_GAMES_DIR'] = env['DM_GAMES_DIR'] = games_dir(pdir)
+        g = gamemod.load(f'{app:016X}')
+        B.say('[RED] provisional game profile: values guessed from the survey, the game may not boot')
+    B.say(f'game profile: {g.id} ({g.get("name", "")}){" (provisional: " + str(g.dir) + ")" if provisional else ""}')
     builds, need = g.builds(), g.words('shader_versions')
     have, derived = B.nsp_versions(fam, builds), False
-    pkg_ver = package or max(have, key=B.vnum)
+    pkg_ver = package or (g.get('package') if provisional else max(have, key=B.vnum))
     if pkg_ver not in have: raise KitError(f'version {pkg_ver} is not in the folder, which holds {", ".join(sorted(have, key=B.vnum))}')
-    if pkg_ver not in builds: derived = f'{pkg_ver} is not a version game profile {g.id} registers ({", ".join(f"{v} {b["display"]}" for v, b in builds.items())})'
+    if provisional: derived = 'provisional'   # downstream it is handled like a derived profile: its own shader tables, copied into the kit
+    elif pkg_ver not in builds: derived = f'{pkg_ver} is not a version game profile {g.id} registers ({", ".join(f"{v} {b["display"]}" for v, b in builds.items())})'
     elif not all(v in have for v in need): derived = f'the folder has no {", ".join(v for v in need if v not in have)}, whose files game profile {g.id}\'s shader tables were made from'
     if alias and not derived: derived = f'title {app:016X} is not game profile {g.id}\'s title {g.title_id:016X}'
-    if derived: B.say(f'[RED] {derived}: packing {pkg_ver} from a profile derived from it (the game may need the update the profile names to run well)')
+    if derived and not provisional: B.say(f'[RED] {derived}: packing {pkg_ver} from a profile derived from it (the game may need the update the profile names to run well)')
     versions = [pkg_ver] if derived else need + ([pkg_ver] if pkg_ver not in need else [])
     work = nsp_dir / f'{g.id}_build'
     env.update(DM_GAME=g.id, DM_ROOT=str(work), WORK=str(work / 'tmp'))
@@ -197,12 +208,13 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
     nx = B.build_nx_extract(repo, work, logs, env)
     B.PROG.end()
     dirs = {v: B.extract(nx, keys, ex, v, *picks[v], None, logs, g) for v in versions}
-    bad = [] if derived else [f'{v}: {x}' for v in versions for x in B.build_mismatch(dirs[v], v, g)]
+    bad = [f'{v}: {x}' for v in versions for x in B.build_mismatch(dirs[v], v, g)] if provisional or not derived else []
+    if bad and provisional: raise KitError(f'not the builds provisional game profile {g.id} registers: {"; ".join(bad)}')
     if bad:
         derived = f'not the builds game profile {g.id} registers: {"; ".join(bad)}'
         B.say(f'{derived}: packing {pkg_ver} from a profile derived from it')
         versions, dirs = [pkg_ver], {pkg_ver: dirs[pkg_ver]}
-    if derived:
+    if derived and not provisional:
         pdir = nsp_dir / f'{app:016X}_build' / 'profile'
         disp = B.derive_profile(g, pdir / g.id, pkg_ver, dirs[pkg_ver], g.words('modules'), app)
         os.environ['DM_GAMES_DIR'] = env['DM_GAMES_DIR'] = games_dir(pdir)
@@ -228,7 +240,7 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
     B.say(f'app name: {app_name}; version: {app_version or "1.0"}; bundle ID: {bundle_id}; language: {lang}')
 
     patched = work / f'patched_{pkg_ver}'
-    B.rewrite(py, repo, game / 'ExeFS', patched, env, logs, g)
+    g = B.rewrite(py, repo, game / 'ExeFS', patched, env, logs, g, provisional) or g
     B.chain_header(py, repo, env, logs)
     if derived:
         B.provisional_prep(py, repo, env, logs, g)

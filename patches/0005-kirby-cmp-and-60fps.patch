@@ -1,0 +1,30 @@
+--- a/dm/gfx/tools/shader_split.py	2026-10-25 22:32:27.073227400 +0100
++++ b/dm/gfx/tools/shader_split.py	2026-10-25 22:32:27.255911500 +0100
+@@ -1650,7 +1650,8 @@
+     if head[:8] == GFPAK:   # a Game Freak archive (gfpak_members): each entry scanned as a file of its own (the shaders are BNSH entries)
+         for nm, m in gfpak_members(open(path, 'rb').read(), '/' + rel): scan_blob(m, f'/{rel}{nm}', found)
+         return rel, uniq_keys(found), var_pairs(found), trees
+-    d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
++    if head[4:8] == ZSTD_MAGIC and path.endswith('.cmp'): d = zstd_mod().decompress(open(path, 'rb').read()[4:])   # Kirby and the Forgotten Land's .cmp: a u32 size, then a zstd frame (its models, archives and effects)
++    else: d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
+     if d[:4] == b'Yaz0': d = yaz0(d)
+     if d[:3] == b'XNB' and d[4] == 5 and d[5] & 0xC0 and len(d) > 14:   # a compressed XNB (Stardew Valley: 3,535 LZ4 files, 8 LZX): only effects (EffectReader) carry MGFX shaders, and for LZX the reader names sit in the first block, so it decides whether the rest is worth decoding
+         if d[5] & 0x80:
+--- /dev/null
++++ b/dm/games/01004D300C5AE000/patches.py	2026-10-25 22:32:27.278844900 +0100
+@@ -0,0 +1,15 @@
++# Kirby and the Forgotten Land (01004D300C5AE000): the rewriter's patches of this game's own builds (nxkit; the game profile itself is still a provisional one). dm/tools/patch_nso.py loads every
++# profile's patches.py and applies those of a module's NSO build ID; CUTS as described there ("Registered patches")
++CUTS = {
++  # Kirby and the Forgotten Land 1.1.0 (v65536) main: 60 fps (30 on the Switch). The game presents at interval 1 (main+0x51c89c, its only caller main+0x746c74 passes 1) and paces itself in the
++  # main loop (main+0x532004 on): the frame pacer at x19 counts the time since the last frame in whole 1/60 s periods (16,666,666 ns, main+0x532e68) and waits for (frames due at +0x64) x
++  # (1/60 s periods per frame) of the current mode, +0x60: 0 → +0x10, 1 → +0x24, 2 → +0x3c (main+0x532e50, main+0x533cf0, main+0x533d00, main+0x533d14). The game's step is the measured
++  # time in 1/60 s periods, averaged over +0x44 frames and capped at +0x34 (main+0x532f34 to main+0x533110, stored at +0x6c / +0x78), so one period per frame keeps the game's speed.
++  # Each period read becomes mov w9,#1
++  'a6ce40dc3aedb1becacd2f1ff4515307': [
++    (0x532e50, '691240b9', '29008052', 'frame pacer, mode 0: ldr w9,[x19,#0x10] (1/60 s periods per frame) → mov w9,#1'),
++    (0x533cf0, '691240b9', '29008052', 'frame pacer wait, mode 0: ldr w9,[x19,#0x10] → mov w9,#1'),
++    (0x533d00, '692640b9', '29008052', 'frame pacer wait, mode 1: ldr w9,[x19,#0x24] → mov w9,#1'),
++    (0x533d14, '693e40b9', '29008052', 'frame pacer wait, mode 2: ldr w9,[x19,#0x3c] → mov w9,#1'),
++  ],
++}

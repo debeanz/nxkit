@@ -72,6 +72,13 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
   GPU-only pools that nothing used for about 7 seconds are dropped and rebuilt from game memory when
   needed again, so games that never free their textures don't run the iPhone out of memory.
   `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off; the log line `idle texture eviction:` shows what it freed.
+- **Kirby and the Forgotten Land** (testing): the shader split reads Kirby's `.cmp` files (a size, then
+  zstd), and a 60 fps patch for 1.1.0's frame pacer (one 1/60 s period per frame instead of two; the game
+  steps by the measured time, so its speed stays right).
+
+Games nxnative has no profile for are built from a **provisional profile**, as nxnative's own script
+does: it surveys the game and guesses the profile (kept in `<NSP folder>/<title ID>_build/profile/`, reused
+and editable). The heap check that boots the game on a Mac is skipped, so such a game may not boot at first.
 
 ## Installing on the iPhone (from Windows)
 
