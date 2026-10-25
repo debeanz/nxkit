@@ -46,14 +46,22 @@ jobs:
         with:
           python-version: '3.14'
 
+      # .NET 10 with DOTNET_ROOT set: nxnative's shader translator (dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate, a .NET app host) finds its runtime only through it
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Install the build tools
         run: |
           brew install xcodegen zstd spirv-cross glslang
-          dotnet --list-sdks 2>/dev/null | grep -q '^10\.' || brew install --cask dotnet-sdk
           python -m pip install -q lz4 capstone fonttools cryptography
           # Xcode 26 and later install the Metal compiler separately
           xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
           xcodebuild -version
+          echo "DOTNET_ROOT=$DOTNET_ROOT"
+          # The translator must start (an NVN game's shaders go through it): its source fingerprint, or why it does not run
+          sha=$(nxnative/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate --source-sha) || { echo "::error::nxnative's shader translator does not start"; nxnative/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate --source-sha; exit 1; }
+          echo "shader translator source $sha"
 
       - name: Download the build kit and delete its release
         env:
