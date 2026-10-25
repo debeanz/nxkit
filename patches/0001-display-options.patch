@@ -35,18 +35,28 @@ index c3ac8c1..3cb1b56 100644
      for (int i = 0; i < 16; i++) if (_game[i]) {
          CGPoint p = [_game[i] locationInView:self];
 diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
-index d01c66d..42600d4 100644
+index d01c66d..d284031 100644
 --- a/dm/ios/Sources/front_ios.m
 +++ b/dm/ios/Sources/front_ios.m
-@@ -37,12 +37,32 @@ static UILabel *front_ios_fps_label(void);
+@@ -30,6 +30,7 @@ static UILabel *front_ios_fps_label(void);
+         CAMetalLayer *l = (CAMetalLayer *)self.layer;
+         l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm;
+         l.contentsScale = UIScreen.mainScreen.nativeScale; l.framebufferOnly = NO; l.opaque = YES;
++        l.contentsGravity = kCAGravityResize;   // the drawable fills the view whatever its shape (launcher Screen Scaling)
+         self.backgroundColor = UIColor.blackColor;
+     }
+     return self;
+@@ -37,12 +38,34 @@ static UILabel *front_ios_fps_label(void);
  - (void)layoutSubviews {
      [super layoutSubviews];
      CAMetalLayer *l = (CAMetalLayer *)self.layer;
 -    l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
-+    CGSize px = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
-+    int rh = getenv("DM_IOS_RES") ? atoi(getenv("DM_IOS_RES")) : 0;   // launcher Resolution: the drawable's height in pixels (0: the screen's own)
-+    if (rh > 0 && rh < px.height) px = CGSizeMake(round(px.width * rh / px.height), rh);
-+    l.drawableSize = px;
++    // The drawable is always 16:9, the game's picture: the present (nvn_mtl.m present_encode) puts bars into a drawable of another shape, so a stretched view
++    // gets a 16:9 drawable that the layer stretches. Its height is the view's in pixels, or the launcher Resolution's when that is smaller
++    CGFloat h = round(self.bounds.size.height * l.contentsScale);
++    int rh = getenv("DM_IOS_RES") ? atoi(getenv("DM_IOS_RES")) : 0;
++    if (rh > 0 && rh < h) h = rh;
++    if (h > 0) l.drawableSize = CGSizeMake(round(h * 16.0 / 9.0), h);
  }
  @end
  
@@ -72,7 +82,7 @@ index d01c66d..42600d4 100644
  @property (nonatomic, strong) UIView *pad;
  @property (nonatomic, strong) UILabel *fps;
  @property (nonatomic) BOOL launched;
-@@ -68,8 +88,12 @@ static void launcher_done(void) { [g_root startGame]; }
+@@ -68,8 +91,12 @@ static void launcher_done(void) { [g_root startGame]; }
  - (void)startGame {
      if (self.game) return;
      if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) setenv("MTL_HUD_ENABLED", "1", 0);   // Metal reads it when a device is made: before the game view makes its own (an env file's DM_METAL_HUD sets it in main.m already)
@@ -86,7 +96,7 @@ index d01c66d..42600d4 100644
      g_layer = (CAMetalLayer *)self.game.layer;
      if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
      dm_haptics_apple_init();
-@@ -85,9 +109,9 @@ static void launcher_done(void) { [g_root startGame]; }
+@@ -85,9 +112,9 @@ static void launcher_done(void) { [g_root startGame]; }
  - (void)viewDidLayoutSubviews {
      [super viewDidLayoutSubviews];
      CGRect b = self.view.bounds; if (!self.game) return;
