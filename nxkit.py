@@ -80,6 +80,7 @@ def checkout(home, ref=None):
     run(['git', '-C', repo, 'fetch', '-q', 'origin'])
     run(['git', '-C', repo, 'reset', '-q', '--hard', ref or 'origin/main'])   # also drops chain_header's rewrite of dm/gfx/nvn/dmsh_chain.h from the last build
     commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    apply_patches(repo)   # the same patches as the Mac build: the PC steps (the shader split) need the Windows fixes
     return repo, commit
 
 
@@ -274,7 +275,7 @@ def zip_dir(d, out):
 
 # ---- Cloud (macOS): build the slim IPA from the kit ----
 def apply_patches(repo):
-    """nxkit's changes to nxnative (patches/*.patch, in name order): iPhone-side only, so the PC steps run on nxnative as it is"""
+    """nxkit's changes to nxnative (patches/*.patch, in name order), applied on the PC (checkout) and on the Mac (build) alike"""
     for p in sorted((HERE / 'patches').glob('*.patch')):
         if subprocess.run(['git', '-C', repo, 'apply', '--reverse', '--check', p], capture_output=True).returncode == 0: continue   # already applied
         r = subprocess.run(['git', '-C', repo, 'apply', p], capture_output=True, text=True)
