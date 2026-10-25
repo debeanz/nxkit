@@ -46,10 +46,11 @@ jobs:
         with:
           python-version: '3.14'
 
-      # .NET 10 with DOTNET_ROOT set: nxnative's shader translator (dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate, a .NET app host) finds its runtime only through it
+      # .NET 10 with DOTNET_ROOT set: nxnative's shader translator (dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate, a .NET app host) finds its runtime only through it.
+      # Pinned: on 2026-10-25 Microsoft listed SDK 10.0.403 before its files were online, and '10.0.x' then failed to install
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.402'
 
       - name: Install the build tools
         run: |
