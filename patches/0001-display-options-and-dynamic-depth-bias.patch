@@ -1,0 +1,128 @@
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+index dee2e10..4388326 100644
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -10,6 +10,9 @@ DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=
+ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Render scale
+ DM_PRESENT_SNAP	toggle	-	0	gfxapi:nvn	Frame buffering	May reduce stutter; adds display latency.
+ DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Console mode
++DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
++DM_IOS_ASPECT	choice	game=16:9,screen=iPhone Default,43=4:3	game	always	Aspect Ratio
++DM_IOS_SCALING	choice	fit=Fit,stretch=Stretch,zoom=Zoom	fit	always	Screen Scaling	Fit keeps the whole picture; Stretch fills the box out of shape; Zoom fills it and cuts the edges.
+ DM_LANG	choice	languages	build:DM_LANG	languages>1	Game language
+ DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	always	Frame-rate counter
+ DM_METAL_HUD	toggle	-	0	always	Performance HUD
+diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
+index 7d46abb..e403c88 100644
+--- a/dm/gfx/vk/hle_vk.m
++++ b/dm/gfx/vk/hle_vk.m
+@@ -933,7 +933,18 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
+         const VkPipelineDynamicStateCreateInfo *dy = ci->pDynamicState;
+         for (uint32_t i = 0; dy && i < dy->dynamicStateCount; i++) {
+             VkDynamicState s = dy->pDynamicStates[i];
+-            if (s == VK_DYNAMIC_STATE_VIEWPORT) p->dyn_vp = 1; else if (s == VK_DYNAMIC_STATE_SCISSOR) p->dyn_sc = 1; else RED1("dynamic state %d not implemented (the imports have no matching set function)", s);
++            if (s == VK_DYNAMIC_STATE_VIEWPORT) { p->dyn_vp = 1; continue; }
++            if (s == VK_DYNAMIC_STATE_SCISSOR) { p->dyn_sc = 1; continue; }
++            // A dynamic state ignores the pipeline's own value, and the imports have no matching set function, so the game never sets it: the value is the driver's initial one (zero).
++            // Depth bias: Hades (The Forge lists it dynamic) has pipelines with a static bias the Switch never applies; applying it moved layers forward (grey foreground, the HUD bar
++            // hidden behind it). DM_VK_STATIC_BIAS=1 applies the pipeline's value as before
++            static int seen[16], static_bias = -1;
++            if (static_bias < 0) static_bias = getenv("DM_VK_STATIC_BIAS") && atoi(getenv("DM_VK_STATIC_BIAS"));
++            if (s == VK_DYNAMIC_STATE_DEPTH_BIAS && p->bias && !static_bias) {
++                static int n; if (n++ < 8) LOG("[vk] dynamic depth bias: the pipeline's static bias %.3f (slope %.3f, clamp %.3f) is not applied", p->bias_c, p->bias_s, p->bias_cl);
++                p->bias = 0;
++            }
++            if (s < 16 && !seen[s]) { seen[s] = 1; LOG("[vk] dynamic state %d: the game cannot set it (no matching import); %s", s, s == VK_DYNAMIC_STATE_DEPTH_BIAS ? (static_bias ? "the pipeline's bias is applied (DM_VK_STATIC_BIAS)" : "no bias") : "the pipeline's value is used"); }
+         }
+         const VkPipelineViewportStateCreateInfo *vs = ci->pViewportState;
+         if (!p->dyn_vp && vs && vs->pViewports && vs->viewportCount) { p->vp = vp_of(&vs->pViewports[0]); p->has_vp = 1; }
+diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
+index c3ac8c1..3cb1b56 100644
+--- a/dm/ios/Sources/DmGamepad.m
++++ b/dm/ios/Sources/DmGamepad.m
+@@ -275,13 +275,13 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y);
+     if (changed || stick || _stickShown) [self refresh];   // also refresh on the stick release so the knob returns to the centre
+     _stickShown = stick;
+ }
+-// Touches no control takes (all of them while a physical controller is connected) go to the game's touch screen, normalized on the 16:9 picture that front_ios.m
+-// centres in the screen: Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
++// Touches no control takes (all of them while a physical controller is connected) go to the game's touch screen, normalized on the picture where front_ios.m
++// lays it out (launcher aspect ratio and scaling): Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
++CGRect front_ios_game_rect(void);
+ - (void)pushGame {
+-    CGRect b = self.bounds; CGFloat w = b.size.width, h = b.size.height;
++    CGRect g = front_ios_game_rect(); CGFloat w = g.size.width, h = g.size.height;
+     if (w <= 0 || h <= 0) return;
+-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
+-    CGFloat x0 = (b.size.width - w) / 2, y0 = (b.size.height - h) / 2;
++    CGFloat x0 = g.origin.x, y0 = g.origin.y;   // the pad covers the root view, so its coordinates are the root view's
+     dm_touch t[16]; int n = 0;
+     for (int i = 0; i < 16; i++) if (_game[i]) {
+         CGPoint p = [_game[i] locationInView:self];
+diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
+index d01c66d..d765681 100644
+--- a/dm/ios/Sources/front_ios.m
++++ b/dm/ios/Sources/front_ios.m
+@@ -37,12 +37,34 @@ static UILabel *front_ios_fps_label(void);
+ - (void)layoutSubviews {
+     [super layoutSubviews];
+     CAMetalLayer *l = (CAMetalLayer *)self.layer;
+-    l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
++    CGSize px = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
++    int rh = getenv("DM_IOS_RES") ? atoi(getenv("DM_IOS_RES")) : 0;   // launcher Resolution: the drawable's height in pixels (0: the screen's own)
++    if (rh > 0 && rh < px.height) px = CGSizeMake(round(px.width * rh / px.height), rh);
++    l.drawableSize = px;
+ }
+ @end
+ 
++// Launcher Aspect Ratio and Screen Scaling: where the game's 16:9 picture goes. The aspect ratio picks a box centred in the screen (16:9, the whole screen or 4:3);
++// scaling puts the picture in it whole with bars (Fit), filled out of shape (Stretch) or filled and cut at the box's edges (Zoom)
++static CGRect g_game_rect;   // the picture's rectangle in the root view (DmGamepad.m maps the game's touch screen onto it)
++CGRect front_ios_game_rect(void) { return g_game_rect; }
++static void game_layout(CGRect b, CGRect *box, CGRect *pic) {
++    const char *a = getenv("DM_IOS_ASPECT"), *sc = getenv("DM_IOS_SCALING");
++    CGFloat r = a && !strcmp(a, "screen") ? b.size.width / b.size.height : a && !strcmp(a, "43") ? 4.0 / 3.0 : 16.0 / 9.0;
++    CGFloat w = b.size.width, h = b.size.height;
++    if (w / h > r) w = h * r; else h = w / r;
++    *box = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
++    CGFloat pw = w, ph = h;   // Stretch: the box itself
++    if (!sc || strcmp(sc, "stretch")) {
++        int zoom = sc && !strcmp(sc, "zoom");
++        if ((w / h > 16.0 / 9.0) != zoom) pw = h * 16.0 / 9.0; else ph = w * 9.0 / 16.0;   // Fit: inside the box; Zoom: covering it
++    }
++    *pic = CGRectMake(round((w - pw) / 2), round((h - ph) / 2), pw, ph);   // in the box
++}
++
+ @interface DmRootVC : UIViewController
+ @property (nonatomic, strong) DmGameView *game;
++@property (nonatomic, strong) UIView *box;   // clips the picture (Zoom)
+ @property (nonatomic, strong) UIView *pad;
+ @property (nonatomic, strong) UILabel *fps;
+ @property (nonatomic) BOOL launched;
+@@ -68,8 +90,12 @@ static void launcher_done(void) { [g_root startGame]; }
+ - (void)startGame {
+     if (self.game) return;
+     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) setenv("MTL_HUD_ENABLED", "1", 0);   // Metal reads it when a device is made: before the game view makes its own (an env file's DM_METAL_HUD sets it in main.m already)
++    self.box = [[UIView alloc] initWithFrame:self.view.bounds];
++    self.box.clipsToBounds = YES; self.box.backgroundColor = UIColor.blackColor;
++    [self.view addSubview:self.box];
+     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
+-    [self.view addSubview:self.game];
++    [self.box addSubview:self.game];
++    LOG("front end: aspect ratio %s, scaling %s, resolution %s", getenv("DM_IOS_ASPECT") ?: "game", getenv("DM_IOS_SCALING") ?: "fit", getenv("DM_IOS_RES") && atoi(getenv("DM_IOS_RES")) ? getenv("DM_IOS_RES") : "native");
+     g_layer = (CAMetalLayer *)self.game.layer;
+     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
+     dm_haptics_apple_init();
+@@ -85,9 +111,9 @@ static void launcher_done(void) { [g_root startGame]; }
+ - (void)viewDidLayoutSubviews {
+     [super viewDidLayoutSubviews];
+     CGRect b = self.view.bounds; if (!self.game) return;
+-    CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
+-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
+-    self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
++    CGRect box, pic; game_layout(b, &box, &pic);
++    self.box.frame = box; self.game.frame = pic;
++    g_game_rect = CGRectOffset(pic, box.origin.x, box.origin.y);
+     if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
+         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
+         self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);

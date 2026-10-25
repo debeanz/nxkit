@@ -273,7 +273,17 @@ def zip_dir(d, out):
 
 
 # ---- Cloud (macOS): build the slim IPA from the kit ----
+def apply_patches(repo):
+    """nxkit's changes to nxnative (patches/*.patch, in name order): iPhone-side only, so the PC steps run on nxnative as it is"""
+    for p in sorted((HERE / 'patches').glob('*.patch')):
+        if subprocess.run(['git', '-C', repo, 'apply', '--reverse', '--check', p], capture_output=True).returncode == 0: continue   # already applied
+        r = subprocess.run(['git', '-C', repo, 'apply', p], capture_output=True, text=True)
+        if r.returncode: raise KitError(f'{p.name} does not apply to this nxnative commit: {r.stderr.strip()[-300:]}')
+        say(f'applied {p.name}')
+
+
 def build(repo, kit_dir, out_ipa):
+    apply_patches(repo)
     B, gamemod, pg, nacp = load_nxnative(repo)
     kit, out_ipa = Path(kit_dir).resolve(), Path(out_ipa).resolve()
     meta = json.loads((kit / 'meta.json').read_text())

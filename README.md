@@ -56,6 +56,17 @@ A first build takes roughly 15–60 minutes, depending on the game.
 Options: `-p v589824` (version to pack), `--app-name`, `-l ja` (language), `--no-fps` (hide the frame
 counter), `-o out.ipa`, `--keep-extracted` (keep the extracted files to rebuild faster).
 
+## nxkit's changes to nxnative
+
+The cloud build applies the patches in `patches/` to nxnative before compiling the app:
+
+- **Display options** in the launcher: Resolution (Native, 1920x1080, 1600x900, 1280x720), Aspect Ratio
+  (16:9, iPhone Default, 4:3) and Screen Scaling (Fit, Stretch, Zoom). Touches on the game's touch screen
+  follow the picture.
+- **Vulkan games:** a pipeline's depth bias is not applied when the game marks it as dynamic, as on the
+  Switch (fixes Hades' grey foreground and the health bar hidden behind it). `DM_VK_STATIC_BIAS=1` in
+  `Documents/env.txt` on the iPhone switches back for comparison.
+
 ## Installing on the iPhone (from Windows)
 
 Use **Sideloadly**, **AltStore** (Windows) or **Impactor**. Heavy games need the *Increased Memory Limit*
