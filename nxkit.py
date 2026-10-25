@@ -14,7 +14,7 @@ Commands (run on the PC unless noted):
 
 Everything that leaves the PC is encrypted with AES-256-GCM under the kit password, so a public repository's releases and artifacts show nothing readable.
 """
-import argparse, getpass, json, os, secrets, shutil, struct, subprocess, sys, tempfile, time, zipfile
+import argparse, getpass, json, os, re, secrets, shutil, struct, subprocess, sys, tempfile, time, zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -80,6 +80,9 @@ def checkout(home, ref=None):
     run(['git', '-C', repo, 'fetch', '-q', 'origin'])
     run(['git', '-C', repo, 'reset', '-q', '--hard', ref or 'origin/main'])   # also drops chain_header's rewrite of dm/gfx/nvn/dmsh_chain.h from the last build
     commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    for p in sorted((HERE / 'patches').glob('*.patch')):   # files a patch creates are untracked, so the reset leaves them: removed, or the patch would not apply again
+        for m in re.finditer(r'^--- /dev/null\n\+\+\+ b/(\S+)', p.read_text(encoding='utf-8').replace('\r\n', '\n'), re.M):
+            (repo / m.group(1)).unlink(missing_ok=True)
     apply_patches(repo)   # the same patches as the Mac build: the PC steps (the shader split) need the Windows fixes
     return repo, commit
 
