@@ -1,0 +1,117 @@
+# The Mac part of an nxkit build (see README.md): started by `nxkit.py game` on the PC, never by hand.
+# Input: an encrypted build kit the PC attached to a release of this repository (no game files: the rewritten code, the shader inputs, the icon).
+# Output: the encrypted "slim" IPA (the app and its shader libraries, no game files) as the artifact "ipa", which the PC downloads and merges with the game files.
+# Nothing readable is published: the kit and the IPA are AES-256-GCM encrypted with the KIT_PASSWORD secret, the kit's release is deleted as soon as it is downloaded
+# and the artifact expires after a day (the PC deletes it as soon as it has it).
+name: Build IPA
+run-name: build ${{ inputs.kit_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      kit_tag:
+        description: 'Release tag of the encrypted build kit (nxkit.py sets it)'
+        required: true
+      nxnative_ref:
+        description: 'nxnative commit the kit was prepared with'
+        required: true
+
+permissions:
+  contents: write   # deletes the kit's release
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-26   # the runner nxnative's own CI builds its iOS app on
+    timeout-minutes: 240
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative at the kit's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: ${{ inputs.nxnative_ref }}
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the build tools
+        run: |
+          brew install xcodegen zstd spirv-cross glslang
+          dotnet --list-sdks 2>/dev/null | grep -q '^10\.' || brew install --cask dotnet-sdk
+          python -m pip install -q lz4 capstone fonttools cryptography
+          # Xcode 26 and later install the Metal compiler separately
+          xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          xcodebuild -version
+
+      - name: Download the build kit and delete its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.kit_tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kit"
+          gh release download "$TAG" --pattern '*.nxk' --dir "$RUNNER_TEMP/kit"
+          gh release delete "$TAG" --yes --cleanup-tag
+
+      - name: Decrypt the build kit
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing: run nxkit.py setup on the PC"; exit 1; fi
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP"/kit/*.nxk "$RUNNER_TEMP/kit.zip"
+          rm -rf "$RUNNER_TEMP/kit"
+          unzip -q "$RUNNER_TEMP/kit.zip" -d "$RUNNER_TEMP/kit"
+          rm "$RUNNER_TEMP/kit.zip"
+
+      - name: Build the slim IPA
+        run: python nxkit/nxkit.py build nxnative "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/slim.ipa" < /dev/null
+
+      - name: Encrypt the IPA
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          python nxkit/nxkit.py encrypt "$RUNNER_TEMP/slim.ipa" "$RUNNER_TEMP/out/slim.ipa.nxk"
+          ls -lh "$RUNNER_TEMP/out"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ipa
+          path: ${{ runner.temp }}/out/slim.ipa.nxk
+          compression-level: 0
+          retention-days: 1
+
+      - name: Encrypt the build logs
+        if: failure()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -d "$RUNNER_TEMP/kit/work/logs" ]; then
+            mkdir -p "$RUNNER_TEMP/out"
+            tar -czf "$RUNNER_TEMP/logs.tgz" -C "$RUNNER_TEMP/kit/work" logs
+            python nxkit/nxkit.py encrypt "$RUNNER_TEMP/logs.tgz" "$RUNNER_TEMP/out/logs.tgz.nxk"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: logs
+          path: ${{ runner.temp }}/out/logs.tgz.nxk
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/kit.zip" "$RUNNER_TEMP/slim.ipa" "$RUNNER_TEMP/logs.tgz"

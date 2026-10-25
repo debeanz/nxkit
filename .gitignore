@@ -1,0 +1,11 @@
+# Never commit keys, game files or the kit password
+nxkit.local.json
+.nxkit/
+__pycache__/
+*.keys
+*.nsp
+*.nsz
+*.xci
+*.xcz
+*.ipa
+*.nxk
