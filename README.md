@@ -60,12 +60,9 @@ counter), `-o out.ipa`, `--keep-extracted` (keep the extracted files to rebuild 
 
 The cloud build applies the patches in `patches/` to nxnative before compiling the app:
 
-- **Display options** in the launcher: Resolution (Native, 1920x1080, 1600x900, 1280x720), Aspect Ratio
-  (16:9, iPhone Default, 4:3) and Screen Scaling (Fit, Stretch, Zoom). Touches on the game's touch screen
-  follow the picture.
-- **Vulkan games:** a pipeline's depth bias is not applied when the game marks it as dynamic, as on the
-  Switch (fixes Hades' grey foreground and the health bar hidden behind it). `DM_VK_STATIC_BIAS=1` in
-  `Documents/env.txt` on the iPhone switches back for comparison.
+- **Display options** in the launcher: Resolution (Native, 1920x1080, 1600x900, 1280x720: the size the
+  picture is scaled to on screen) and Screen Scaling (Fit 16:9, Stretch full screen, Stretch 1.943:1,
+  Zoom full screen). Touches on the game's touch screen follow the picture.
 
 ## Installing on the iPhone (from Windows)
 
