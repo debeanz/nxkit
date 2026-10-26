@@ -1,0 +1,63 @@
+diff --git a/dm/games/01008CF01BAAC000/game.tsv b/dm/games/01008CF01BAAC000/game.tsv
+index 23ad2ef..7bb4166 100644
+--- a/dm/games/01008CF01BAAC000/game.tsv
++++ b/dm/games/01008CF01BAAC000/game.tsv
+@@ -19,6 +19,9 @@ shader_versions	v196608
+ 
+ # ---- Files ----
+ # every module main imports from
++# nxkit: No blur, always on. The depth-of-field / tilt-shift composites (postprocess.bfsha) output sharp × (1 − w·s) + blur levels × w·s, s from c5[1].z (and
++# c5[1].w below the focus line); with both 0 they output the sharp frame. Hardware bank 5 is the game's uniform slot 2 (bank minus 3)
++no_blur	b8360b726c889dc4/6cac8700142dee3d/bdbde27d7525a968:2:0x18,0x1c
+ modules	main subsdk0 subsdk1 sdk
+ romfs_marker	region_common/audio/edward.bfsar
+ zip_store	.arc:.bffnt:.bfntpj:.bfres:.bfsar:.bfstm:.bntx:.ptcl:.webm:.metallib
+diff --git a/dm/games/game.py b/dm/games/game.py
+index fdabd14..a9b52dd 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -134,6 +134,8 @@ def header(g):
+     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
+     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
+     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
++    nbl = g.get('no_blur', '')   # nxkit: <fragment key>[/<fragment key>...]:<uniform slot>:<offset>[,<offset>...]: the floats zeroed in that uniform buffer for those shaders' draws (nvn_mtl.m, No blur)
++    if nbl and not re.fullmatch(r'[0-9a-f]{16}(/[0-9a-f]{16})*:\d+:0x[0-9a-f]+(,0x[0-9a-f]+)*', nbl): sys.exit(f'{g.id}: no_blur must be <fragment key>[/<key>...]:<uniform slot>:<offset>[,<offset>...]: {nbl}')
+     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
+     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
+     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
+@@ -170,6 +172,7 @@ def header(g):
+          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
+          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
++         f'#define DM_GAME_NO_BLUR {q(nbl)}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index b568408..487def3 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -5513,6 +5513,23 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
+                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
+                 }
+             }
++            {   // nxkit: No blur, always on (profile key no_blur; DM_NO_BLUR=0 turns it off): for the profile's depth-of-field / tilt-shift composite shaders, a copy of the uniform buffer
++                // with the blend strength zeroed, so they output the sharp frame; the game's own buffer is not touched. Not when inline updates deferred in this pass cover it
++                static int nb = -1, nb_reg, nb_n, nb_nk; static char nb_key[8][17]; static uint32_t nb_off[8], nb_max;
++                if (nb < 0) { nb = 0; const char *sp = DM_GAME_NO_BLUR, *e = getenv("DM_NO_BLUR"), *c1 = strchr(sp, ':');
++                    if (sp[0] && c1 && (!e || atoi(e))) {
++                        for (const char *q = sp; q < c1 && nb_nk < 8; q += 17) { memcpy(nb_key[nb_nk], q, 16); nb_key[nb_nk++][16] = 0; if (q[16] != '/') break; }
++                        nb_reg = atoi(c1 + 1);
++                        for (const char *q = strchr(c1 + 1, ':') + 1; q && *q && nb_n < 8; q = strchr(q, ',') ? strchr(q, ',') + 1 : NULL) { nb_off[nb_n] = (uint32_t)strtoul(q, NULL, 16); nb_max = MAX(nb_max, nb_off[nb_n] + 4); nb_n++; }
++                        nb = nb_n > 0 && nb_nk > 0; if (nb) MLOG("No blur: %d shaders, uniform slot %d, %d floats zeroed (profile key no_blur; DM_NO_BLUR=0 turns it off)", nb_nk, nb_reg, nb_n); } }
++                int hit = 0; if (nb && reg == nb_reg && ul >= nb_max && ul <= (64u << 10)) for (int k = 0; k < nb_nk && !hit; k++) hit = !strncmp(sh->key, nb_key[k], 16);
++                if (hit && !(g_nubd && ubd_hits(u->addr, u->addr + ul))) {
++                    __strong id<MTLBuffer> ab = nil; size_t o = arena_alloc(ul, &ab);
++                    if (ab) { uint8_t *dst = (uint8_t *)ab.contents + o; memcpy(dst, (const void *)u->addr, ul); for (int i = 0; i < nb_n; i++) memset(dst + nb_off[i], 0, 4);
++                        slots[aid] = ab.gpuAddress + o; USE(ab, MTLResourceUsageRead);
++                        static int once; if (!once++) MLOG("No blur: first composite draw sharp (shader %.16s, uniform copy of %llu bytes)", sh->key, (unsigned long long)ul);
++                        continue; } }
++            }
+             slots[aid] = gpu;
+             USE((__bridge id<MTLBuffer>)mb, MTLResourceUsageRead);
+         } else if (b->kind == NVN_RB_SAMPU && b->n) {   // the samplers of an array of handles in a uniform buffer: element k = the sampler ID of the handle at byte 8k (see the textures below)

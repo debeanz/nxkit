@@ -103,6 +103,11 @@ The Legend of Zelda: Link's Awakening (`patches/01006BB00C6F0000`):
 - **Keep 60 fps**: the game switches itself to 30 fps after a few late frames, and the phone then lowers its
   clocks so it never gets back; its request is not followed. `DM_KEEP_60=0` follows it again.
 
+The Legend of Zelda: Echoes of Wisdom (`patches/01008CF01BAAC000`):
+
+- **No blur**, always on, as in Link's Awakening: its three depth-of-field / tilt-shift composites (`postprocess.bfsha`) get a
+  copy of their uniform buffer with the blend strength zeroed, so they output the sharp frame. `DM_NO_BLUR=0` turns it off.
+
 NieR:Automata (`patches/010056B015FE8000`, testing):
 
 - **Geometry draws batched**: Metal has no geometry stage, so nxnative runs each geometry-shader draw as a vertex capture
