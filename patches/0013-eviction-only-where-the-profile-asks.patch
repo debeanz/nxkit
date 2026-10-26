@@ -1,0 +1,53 @@
+diff --git a/dm/games/0100DCA0064A6000/game.tsv b/dm/games/0100DCA0064A6000/game.tsv
+index c77c39f..8c77d19 100644
+--- a/dm/games/0100DCA0064A6000/game.tsv
++++ b/dm/games/0100DCA0064A6000/game.tsv
+@@ -38,6 +38,8 @@ sys_resource	0x0
+ mem_used	0x4600000
+ # nxkit: the launcher's Half-res textures on by default: at full size the next area's textures ran an 8 GB iPhone out of memory
+ tex_half	on
++# nxkit: textures and render targets nothing used for a while are dropped and made again when needed (its dynamic resolution leaves a full set of targets at every size)
++evict_idle	on
+ 
+ # ---- Frame rate ----
+ # 60 fps (30 on the Switch): the frame limiter waits until 33.333 ms have passed since the frame started, a constant the host sets to 1000 / fps_target (hle_fpslock.c), and the game
+diff --git a/dm/games/game.py b/dm/games/game.py
+index 81e09d1..01a56a1 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -134,6 +134,8 @@ def header(g):
+     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
+     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
+     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
++    evi = g.get('evict_idle', 'off')   # nxkit: on = textures and render targets nothing used lately are dropped (nvn_mtl.m tex_evict_idle; Luigi's Mansion 3's memory)
++    if evi not in ('on', 'off'): sys.exit(f'{g.id}: evict_idle must be on or off: {evi}')
+     k60 = g.get('keep_60', 'off')   # nxkit: on = the game's present interval 2 (its own drop to 30 fps) is not followed (hle_nvn.c nvnWindowSetPresentInterval)
+     if k60 not in ('on', 'off'): sys.exit(f'{g.id}: keep_60 must be on or off: {k60}')
+     thf = g.get('tex_half', 'off')   # nxkit: the launcher's Half-res textures default (nvn_mtl.m tex_half)
+@@ -179,6 +181,7 @@ def header(g):
+          f'#define DM_GAME_NO_BLUR {q(nbl)}',
+          f'#define DM_GAME_TEX_HALF {int(thf == "on")}',
+          f'#define DM_GAME_KEEP_60 {int(k60 == "on")}',
++         f'#define DM_GAME_EVICT_IDLE {int(evi == "on")}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index eaef4b4..3875731 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -3483,12 +3483,12 @@ static void gpu_dst_add(id<MTLTexture> t) {
+ static void ev_hot_add(CFMutableSetRef hot, void *v) { if (v) CFSetAddValue(hot, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
+ static int ev_in(CFMutableSetRef set, void *v) { return v && CFSetContainsValue(set, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
+ static void tex_evict_idle(void) {
+-    static long idle = -1; if (idle < 0) { const char *e = getenv("DM_NVN_EVICT_IDLE"); idle = e ? atol(e) : 1800; if (idle > 0) MLOG("idle texture eviction: on (rebuildable textures unused for %ld submissions; DM_NVN_EVICT_IDLE=0 turns it off)", idle); }
++    static long idle = -1; if (idle < 0) { const char *e = getenv("DM_NVN_EVICT_IDLE"); idle = e ? atol(e) : DM_GAME_EVICT_IDLE ? 1800 : 0; if (idle > 0) MLOG("idle texture eviction: on (rebuildable textures unused for %ld submissions; profile key evict_idle; DM_NVN_EVICT_IDLE=0 turns it off)", idle); }   // nxkit: only for games whose profile asks for it (evict_idle on: Luigi's Mansion 3); DM_NVN_EVICT_IDLE=<submissions> turns it on for another
+     // Render targets and images (nxkit, DM_NVN_EVICT_RT_IDLE submissions, default 64: about a quarter second; 0 turns it off): Luigi's Mansion 3's dynamic resolution renders into a new set of
+     // targets at each size it picks (1167x657, 1228x691, ...) and keeps the old texture objects, so their Metal textures stayed: 442 → 1,212 textures and 2.3 GB more in the few seconds of an
+     // area load, until iOS closed the app. Their content is the GPU's own, written again before it is read; a target nothing drew into or sampled for that long is dropped, and a later use
+     // makes a new one. Every 32 submissions
+-    static long rt_idle = -1; if (rt_idle < 0) { const char *e = getenv("DM_NVN_EVICT_RT_IDLE"); rt_idle = e ? atol(e) : 64; if (rt_idle > 0) MLOG("idle render target eviction: on (unused for %ld submissions; DM_NVN_EVICT_RT_IDLE=0 turns it off)", rt_idle); }
++    static long rt_idle = -1; if (rt_idle < 0) { const char *e = getenv("DM_NVN_EVICT_RT_IDLE"); rt_idle = e ? atol(e) : DM_GAME_EVICT_IDLE ? 64 : 0; if (rt_idle > 0) MLOG("idle render target eviction: on (unused for %ld submissions; profile key evict_idle; DM_NVN_EVICT_RT_IDLE=0 turns it off)", rt_idle); }
+     if (idle <= 0 && rt_idle <= 0) return;
+     int full = idle > 0 && !(g_sub_serial % 256) && g_sub_serial >= (uint64_t)idle, rts = rt_idle > 0 && !(g_sub_serial % 32) && g_sub_serial >= (uint64_t)rt_idle;
+     if (!full && !rts) return;

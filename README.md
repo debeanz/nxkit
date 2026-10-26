@@ -74,13 +74,13 @@ the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nx
 - **Memory recorder from env.txt** (iOS): `DM_MEMSTAT=memstat.tsv` in `Documents/env.txt` now starts
   nxnative's per-second memory breakdown (it used to start before env.txt was read); the file goes
   beside `log.txt`.
-- **Idle texture eviction** (testing, made for Luigi's Mansion 3): GPU copies of compressed textures on
+- **Idle texture eviction** (testing; only in games whose profile has `evict_idle on`, so far Luigi's Mansion 3): GPU copies of compressed textures on
   GPU-only pools that nothing used for about 7 seconds are dropped and rebuilt from game memory when
   needed again, so games that never free their textures don't run the iPhone out of memory.
-  `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off; the log line `idle texture eviction:` shows what it freed.
-- **Idle render targets dropped** (testing, Luigi's Mansion 3): render targets nothing drew into or sampled for
+  `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off (`=1800` turns it on in another game); the log line `idle texture eviction:` shows what it freed.
+- **Idle render targets dropped** (testing; with `evict_idle on`, as above): render targets nothing drew into or sampled for
   64 submissions (about a quarter second) are dropped too; dynamic resolution left a full set of them behind at
-  every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off.
+  every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off (`=64` turns it on in another game).
 - **Half-res textures** (launcher switch under Performance; on by default for Luigi's Mansion 3, profile key `tex_half`): ASTC
   textures of 256x256 or more with mipmaps are made without their top level, so they take a quarter of the memory and look a
   little blurrier. Textures the game draws into are never changed. `DM_TEX_HALF=0` / `1` in `env.txt` overrides the switch; the
