@@ -1,0 +1,56 @@
+--- a/dm/gfx/nvn/nvn_mtl.m	2026-10-26 02:19:54.470507600 +0100
++++ b/dm/gfx/nvn/nvn_mtl.m	2026-10-26 02:19:54.632996600 +0100
+@@ -3501,11 +3501,21 @@
+ static int ev_in(CFMutableSetRef set, void *v) { return v && CFSetContainsValue(set, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
+ static void tex_evict_idle(void) {
+     static long idle = -1; if (idle < 0) { const char *e = getenv("DM_NVN_EVICT_IDLE"); idle = e ? atol(e) : 1800; if (idle > 0) MLOG("idle texture eviction: on (rebuildable textures unused for %ld submissions; DM_NVN_EVICT_IDLE=0 turns it off)", idle); }
+-    if (idle <= 0 || g_sub_serial % 256 || g_sub_serial < (uint64_t)idle) return;
++    // Render targets and images (nxkit, DM_NVN_EVICT_RT_IDLE submissions, default 64: about a quarter second; 0 turns it off): Luigi's Mansion 3's dynamic resolution renders into a new set of
++    // targets at each size it picks (1167x657, 1228x691, ...) and keeps the old texture objects, so their Metal textures stayed: 442 → 1,212 textures and 2.3 GB more in the few seconds of an
++    // area load, until iOS closed the app. Their content is the GPU's own, written again before it is read; a target nothing drew into or sampled for that long is dropped, and a later use
++    // makes a new one. Every 32 submissions
++    static long rt_idle = -1; if (rt_idle < 0) { const char *e = getenv("DM_NVN_EVICT_RT_IDLE"); rt_idle = e ? atol(e) : 64; if (rt_idle > 0) MLOG("idle render target eviction: on (unused for %ld submissions; DM_NVN_EVICT_RT_IDLE=0 turns it off)", rt_idle); }
++    if (idle <= 0 && rt_idle <= 0) return;
++    int full = idle > 0 && !(g_sub_serial % 256) && g_sub_serial >= (uint64_t)idle, rts = rt_idle > 0 && !(g_sub_serial % 32) && g_sub_serial >= (uint64_t)rt_idle;
++    if (!full && !rts) return;
+     uint64_t now = g_sub_serial + 1;
+     os_unfair_lock_lock(&g_rmu);   // g_rmu before g_smu, as treg_drop_pool_views
+-    CFMutableSetRef hot = CFSetCreateMutable(NULL, 0, NULL);
+-    for (int i = 0; i < g_ntreg; i++) { treg_t *r = &g_treg[i]; if (!r->ok || now - r->used >= (uint64_t)idle) continue; ev_hot_add(hot, r->view); ev_hot_add(hot, r->alt); ev_hot_add(hot, r->ar); ev_hot_add(hot, r->im); }
++    CFMutableSetRef hot = CFSetCreateMutable(NULL, 0, NULL), hot_rt = CFSetCreateMutable(NULL, 0, NULL);   // used by a texture ID within the idle window / within the render-target window
++    for (int i = 0; i < g_ntreg; i++) { treg_t *r = &g_treg[i]; if (!r->ok) continue;
++        if (idle > 0 && now - r->used < (uint64_t)idle) { ev_hot_add(hot, r->view); ev_hot_add(hot, r->alt); ev_hot_add(hot, r->ar); ev_hot_add(hot, r->im); }
++        if (rt_idle > 0 && now - r->used < (uint64_t)rt_idle) { ev_hot_add(hot_rt, r->view); ev_hot_add(hot_rt, r->alt); ev_hot_add(hot_rt, r->ar); ev_hot_add(hot_rt, r->im); } }
++    uint64_t rt_bytes = 0; uint32_t rt_n = 0;
+     pthread_mutex_lock(&g_smu);
+     enum { EV_MAX = 512 }; alias_key *ks = malloc(EV_MAX * sizeof *ks); void **vs = malloc(EV_MAX * sizeof *vs); uint32_t n = 0;
+     uint64_t kept_hot = 0, kept_rt = 0, kept_cpu = 0, kept_dst = 0, bytes = 0;
+@@ -3515,7 +3525,13 @@
+         id<MTLTexture> o = (__bridge id<MTLTexture>)v;
+         alias_key k; memcpy(&k, g_alias.keys + (size_t)i * g_alias.klen, sizeof k);
+         const pool_t *pl = (const pool_t *)(uintptr_t)k.pool;
+-        if (o.buffer || (o.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite))) { kept_rt += o.allocatedSize; continue; }
++        if (o.buffer) { kept_rt += o.allocatedSize; continue; }
++        if (o.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite)) {
++            uint64_t last = (uint64_t)(uintptr_t)nvn_hm_get(&g_evu, &v);
++            if (!rts || !last || now - last < (uint64_t)rt_idle || CFSetContainsValue(hot_rt, v) || serial_holds(&g_ghost, o)) { kept_rt += o.allocatedSize; continue; }
++            rt_bytes += o.allocatedSize; rt_n++; ks[n] = k; vs[n++] = v; continue;
++        }
++        if (!full) continue;
+         if (!pl || !(pl->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) || (pl->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL)) { kept_cpu += o.allocatedSize; continue; }
+         if (g_gpu_dst && CFSetContainsValue(g_gpu_dst, v)) { kept_dst += o.allocatedSize; continue; }
+         uint64_t last = (uint64_t)(uintptr_t)nvn_hm_get(&g_evu, &v);
+@@ -3557,10 +3573,10 @@
+     }
+     pthread_mutex_unlock(&g_smu);
+     os_unfair_lock_unlock(&g_rmu);
+-    CFRelease(hot); free(ks); free(vs);
++    CFRelease(hot); CFRelease(hot_rt); free(ks); free(vs);
+     if (n && (g_ev_passes++ < 20 || g_ev_passes % 50 == 0))
+-        MLOG("idle texture eviction: %u textures, %llu MB freed (%llu, %llu MB in total); kept: in use %llu MB, render target / image / linear %llu MB, CPU-visible pool %llu MB, GPU-written %llu MB",
+-             n, (unsigned long long)(bytes >> 20), (unsigned long long)g_ev_n, (unsigned long long)(g_ev_bytes >> 20), (unsigned long long)(kept_hot >> 20), (unsigned long long)(kept_rt >> 20),
++        MLOG("idle texture eviction: %u textures (%u render targets / images, %llu MB of them), %llu MB freed (%llu, %llu MB in total); kept: in use %llu MB, render target / image / linear %llu MB, CPU-visible pool %llu MB, GPU-written %llu MB",
++             n, rt_n, (unsigned long long)(rt_bytes >> 20), (unsigned long long)(bytes >> 20), (unsigned long long)g_ev_n, (unsigned long long)(g_ev_bytes >> 20), (unsigned long long)(kept_hot >> 20), (unsigned long long)(kept_rt >> 20),
+              (unsigned long long)(kept_cpu >> 20), (unsigned long long)(kept_dst >> 20));
+ }
+ void tex_evict_idle_c(void) { tex_evict_idle(); }

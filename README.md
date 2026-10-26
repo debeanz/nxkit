@@ -76,6 +76,9 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
   packaged texture, or one on a CPU_NO_ACCESS pool) gives that memory back to iOS once the GPU copy is made,
   instead of holding the texture twice; packaged textures stay watched for new writes, which re-upload them. `DM_NVN_GUEST_RELEASE=0` turns it off; the log line
   `guest texture copies released:` shows how much it saved.
+- **Idle render targets dropped** (testing, Luigi's Mansion 3): render targets nothing drew into or sampled for
+  64 submissions (about a quarter second) are dropped too; dynamic resolution left a full set of them behind at
+  every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off.
 - **No blur** (Link's Awakening): a launcher switch, on by default. For the game's depth-of-field / tilt-shift
   composite only, the host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it
   outputs the sharp frame; the game's own data is not touched. Profile key `no_blur`.
