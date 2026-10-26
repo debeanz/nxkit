@@ -1,6 +1,8 @@
---- a/dm/gfx/nvn/nvn_mtl.m	2026-10-26 00:32:33.337832500 +0100
-+++ b/dm/gfx/nvn/nvn_mtl.m	2026-10-26 00:32:33.522315500 +0100
-@@ -517,6 +517,49 @@
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 03fb0d1..76e2374 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -526,6 +526,49 @@ int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
      pthread_mutex_unlock(&g_mu);
      return ok;
  }
@@ -50,7 +52,7 @@
  int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
      const pc_ent *c = pc_get(addr, len);
      if (c) { *buf = (__bridge void *)c->buf; *off = addr - c->base; *gpu = c->gpu + *off; return 1; }
-@@ -686,7 +729,7 @@
+@@ -699,7 +742,7 @@ void mtl_sub_begin(void) {
      mtl_init(); g_sub_serial++; g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
      defer_drain();
      defer_reset();
@@ -59,7 +61,7 @@
      if (!g_warm_started && prepare_on()) shmap_load();   // the first submission: the prepare step (warm_start), before anything of it is encoded
      warm_claim();
      if (g_cb) MDIE("submit re-entered");
-@@ -2001,6 +2044,7 @@
+@@ -2023,6 +2066,7 @@ static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
      if (!no_cpu && (!flush_fill || !nvn_flushed(t->mem, t->L.size))) return 0;
      if (!atomic_load(&g_sub_thread_set) || !on_sub_thread() || !mem_any(t->mem, t->L.size)) return 0;   // the upload batch belongs to the submit thread
      if (pkg_upload(t, NULL, mt) != mt) return 0;

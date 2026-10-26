@@ -1,17 +1,8 @@
---- a/dm/gfx/tools/shader_split.py	2026-10-25 22:32:27.073227400 +0100
-+++ b/dm/gfx/tools/shader_split.py	2026-10-25 22:32:27.255911500 +0100
-@@ -1650,7 +1650,8 @@
-     if head[:8] == GFPAK:   # a Game Freak archive (gfpak_members): each entry scanned as a file of its own (the shaders are BNSH entries)
-         for nm, m in gfpak_members(open(path, 'rb').read(), '/' + rel): scan_blob(m, f'/{rel}{nm}', found)
-         return rel, uniq_keys(found), var_pairs(found), trees
--    d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
-+    if head[4:8] == ZSTD_MAGIC and path.endswith('.cmp'): d = zstd_mod().decompress(open(path, 'rb').read()[4:])   # Kirby and the Forgotten Land's .cmp: a u32 size, then a zstd frame (its models, archives and effects)
-+    else: d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
-     if d[:4] == b'Yaz0': d = yaz0(d)
-     if d[:3] == b'XNB' and d[4] == 5 and d[5] & 0xC0 and len(d) > 14:   # a compressed XNB (Stardew Valley: 3,535 LZ4 files, 8 LZX): only effects (EffectReader) carry MGFX shaders, and for LZX the reader names sit in the first block, so it decides whether the rest is worth decoding
-         if d[5] & 0x80:
+diff --git a/dm/games/01004D300C5AE000/patches.py b/dm/games/01004D300C5AE000/patches.py
+new file mode 100644
+index 0000000..fe50e6d
 --- /dev/null
-+++ b/dm/games/01004D300C5AE000/patches.py	2026-10-25 22:32:27.278844900 +0100
++++ b/dm/games/01004D300C5AE000/patches.py
 @@ -0,0 +1,15 @@
 +# Kirby and the Forgotten Land (01004D300C5AE000): the rewriter's patches of this game's own builds (nxkit; the game profile itself is still a provisional one). dm/tools/patch_nso.py loads every
 +# profile's patches.py and applies those of a module's NSO build ID; CUTS as described there ("Registered patches")
@@ -28,3 +19,17 @@
 +    (0x533d14, '693e40b9', '29008052', 'frame pacer wait, mode 2: ldr w9,[x19,#0x3c] → mov w9,#1'),
 +  ],
 +}
+diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
+index 318ad65..0d2f739 100644
+--- a/dm/gfx/tools/shader_split.py
++++ b/dm/gfx/tools/shader_split.py
+@@ -1711,7 +1711,8 @@ def scan_file(args):
+     if head[:8] == GFPAK:   # a Game Freak archive (gfpak_members): each entry scanned as a file of its own (the shaders are BNSH entries)
+         for nm, m in gfpak_members(open(path, 'rb').read(), '/' + rel): scan_blob(m, f'/{rel}{nm}', found)
+         return rel, uniq_keys(found), var_pairs(found), trees
+-    d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
++    if head[4:8] == ZSTD_MAGIC and path.endswith('.cmp'): d = zstd_mod().decompress(open(path, 'rb').read()[4:])   # Kirby and the Forgotten Land's .cmp: a u32 size, then a zstd frame (its models, archives and effects)
++    else: d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
+     if d[:4] == b'Yaz0': d = yaz0(d)
+     if d[:3] == b'XNB' and d[4] == 5 and d[5] & 0xC0 and len(d) > 14:   # a compressed XNB (Stardew Valley: 3,535 LZ4 files, 8 LZX): only effects (EffectReader) carry MGFX shaders, and for LZX the reader names sit in the first block, so it decides whether the rest is worth decoding
+         if d[5] & 0x80:

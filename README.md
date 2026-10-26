@@ -54,11 +54,13 @@ result and writes the finished IPA into the game's folder (for example `Hades.ip
 A first build takes roughly 15–60 minutes, depending on the game.
 
 Options: `-p v589824` (version to pack), `--app-name`, `-l ja` (language), `--no-fps` (hide the frame
-counter), `-o out.ipa`, `--keep-extracted` (keep the extracted files to rebuild faster).
+counter), `-o out.ipa`, `--keep-extracted` (keep the extracted files to rebuild faster), `--nxnative-ref` (the nxnative commit to build with: by default the one
+nxkit's patches are made for; `main` takes the newest, which the patches may not apply to yet).
 
 ## nxkit's changes to nxnative
 
-The cloud build applies the patches in `patches/` to nxnative before compiling the app:
+The cloud build applies the patches in `patches/` to nxnative before compiling the app (they are made for
+the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nxnative's MetalFX upscaling and single-screen launcher):
 
 - **Display options** in the launcher: Resolution (Native, 1920x1080, 1600x900, 1280x720: the size the
   picture is scaled to on screen) and Screen Scaling (Fit 16:9, Stretch full screen, Stretch 1.943:1,

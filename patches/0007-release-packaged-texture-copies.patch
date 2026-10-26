@@ -1,6 +1,8 @@
---- a/dm/gfx/nvn/nvn_mtl.m	2026-10-26 01:20:15.487015700 +0100
-+++ b/dm/gfx/nvn/nvn_mtl.m	2026-10-26 01:20:15.668204300 +0100
-@@ -2190,6 +2190,10 @@
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 76e2374..7c7fcfd 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -2197,6 +2197,10 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
          pk->sparse = t->pool && nvn_sparse_pool(t->pool); pk->vgen = pk->vseen = nvn_sparse_gen();
          pk->tex = pkg_upload(t, &pk->stamp, nil);
          if (!pk->tex) return nil;

@@ -18,6 +18,7 @@ import argparse, getpass, json, os, re, secrets, shutil, struct, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+NXNATIVE_REF = '2db12f7efdf2acf50026ec10f515193d67f2a3b6'   # the nxnative commit patches/ are made for: main moves several times a day and can break them (--nxnative-ref main: the newest)
 CONFIG = HERE / 'nxkit.local.json'     # home folder, repository and kit password (never committed: see .gitignore)
 APP = 'Payload/DmIOS.app/'             # the app folder inside the IPA (dm/ios/tools/build_ipa.sh)
 NEEDS_MAC = {   # what profile_guess.py shader_sources reports → why the build boots the game on a Mac
@@ -72,13 +73,14 @@ def gh(*args, capture=False):
 
 
 def checkout(home, ref=None):
-    """The nxnative checkout under home, at ref (default: the newest main); returns (repo path, commit)"""
+    """The nxnative checkout under home, at ref (default: NXNATIVE_REF; main: the newest main); returns (repo path, commit)"""
     repo = Path(home) / 'nxnative'
     # The files exactly as on the Mac (no CRLF line endings, which Git for Windows writes by default): nxnative hashes its own sources (the shader chain version, build_src.sha256)
     if not (repo / '.git').is_dir(): run(['git', 'clone', '-q', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'https://github.com/seedds/nxnative.git', repo])
     run(['git', '-C', repo, 'config', 'core.autocrlf', 'false']); run(['git', '-C', repo, 'config', 'core.eol', 'lf'])
     run(['git', '-C', repo, 'fetch', '-q', 'origin'])
-    run(['git', '-C', repo, 'reset', '-q', '--hard', ref or 'origin/main'])   # also drops chain_header's rewrite of dm/gfx/nvn/dmsh_chain.h from the last build
+    ref = ref or NXNATIVE_REF
+    run(['git', '-C', repo, 'reset', '-q', '--hard', 'origin/main' if ref == 'main' else ref])   # also drops chain_header's rewrite of dm/gfx/nvn/dmsh_chain.h from the last build
     commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     for p in sorted((HERE / 'patches').glob('*.patch')):   # files a patch creates are untracked, so the reset leaves them: removed, or the patch would not apply again
         for m in re.finditer(r'^--- /dev/null\n\+\+\+ b/(\S+)', p.read_text(encoding='utf-8').replace('\r\n', '\n'), re.M):
@@ -487,7 +489,7 @@ def main(argv=None):
     s.add_argument('--app-name'); s.add_argument('--bundle-id'); s.add_argument('-l', '--language')
     s.add_argument('--no-fps', action='store_true', help='hide the frame-rate counter')
     s.add_argument('--keep-extracted', action='store_true', help='keep the extracted game files (faster next build of the same game)')
-    s.add_argument('--nxnative-ref', help='nxnative commit or branch (default: the newest main)')
+    s.add_argument('--nxnative-ref', help='nxnative commit or branch (default: the commit the patches are made for; main: the newest)')
     s = sub.add_parser('prepare', help='PC step: the build kit (unencrypted zip)')
     s.add_argument('repo'); s.add_argument('nsp_dir'); s.add_argument('-k', '--keys', required=True); s.add_argument('-o', '--out', required=True)
     s.add_argument('-p', '--package'); s.add_argument('--app-name'); s.add_argument('--bundle-id'); s.add_argument('-l', '--language')

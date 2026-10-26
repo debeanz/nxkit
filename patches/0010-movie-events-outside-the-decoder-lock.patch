@@ -1,6 +1,8 @@
---- a/dm/host/hle_movie.c	2026-10-26 02:53:36.123447700 +0100
-+++ b/dm/host/hle_movie.c	2026-10-26 02:53:45.871888000 +0100
-@@ -403,6 +403,10 @@
+diff --git a/dm/host/hle_movie.c b/dm/host/hle_movie.c
+index f29d501..7ada947 100644
+--- a/dm/host/hle_movie.c
++++ b/dm/host/hle_movie.c
+@@ -403,6 +403,10 @@ static void md_job(mdec_t *d, int job) {
  }
  // while packets are queued and an output slot is free, decode the head packet, until the queue is empty or every slot is taken; signal the input / output events by the result
  static void md_pump(mdec_t *d) {
@@ -11,7 +13,7 @@
      pthread_mutex_lock(&d->dmu);
      for (;;) {
          pthread_mutex_lock(&d->mu);
-@@ -415,7 +419,7 @@
+@@ -415,7 +419,7 @@ static void md_pump(mdec_t *d) {
              d->out[s].pic = got; d->out[s].pts = got ? d->jpts_out : 0; d->out[s].flags = left ? 0 : 4; d->outq[d->noutq++] = s;
              if (!left) d->avc_drain = 0;
              pthread_mutex_unlock(&d->mu);
@@ -20,7 +22,7 @@
              continue;
          }
          int slot = -1;
-@@ -441,10 +445,12 @@
+@@ -441,10 +445,12 @@ static void md_pump(mdec_t *d) {
          if (more) d->avc_drain = 1;
          int ineos = d->in_eos;
          pthread_mutex_unlock(&d->mu);

@@ -1,35 +1,8 @@
---- a/dm/games/game.py	2026-10-26 02:04:04.547706800 +0100
-+++ b/dm/games/game.py	2026-10-26 02:04:05.010168100 +0100
-@@ -130,6 +130,8 @@
-     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
-     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
-     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
-+    nbl = g.get('no_blur', '')   # nxkit: <fragment key>:<uniform slot>:<offset>[,<offset>...]: the floats zeroed in that uniform buffer for that shader's draws while the launcher's No blur is on (nvn_mtl.m nb_override)
-+    if nbl and not re.fullmatch(r'[0-9a-f]{16}:\d+:0x[0-9a-f]+(,0x[0-9a-f]+)*', nbl): sys.exit(f'{g.id}: no_blur must be <fragment key>:<uniform slot>:<offset>[,<offset>...]: {nbl}')
-     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
-     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
-     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
-@@ -164,6 +166,7 @@
-          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
-          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
-          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
-+         f'#define DM_GAME_NO_BLUR {q(nbl)}',
-          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
-          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
-          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
---- a/dm/games/settings.tsv	2026-10-26 02:04:04.642190400 +0100
-+++ b/dm/games/settings.tsv	2026-10-26 02:04:05.038045500 +0100
-@@ -9,6 +9,7 @@
- DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=0	Frame rate
- DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Render scale
- DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Frame buffering	May reduce stutter; adds display latency.
-+DM_NO_BLUR	toggle	-	1	DM_GAME_NO_BLUR!=	No blur	Removes the depth-of-field and tilt-shift blur.
- DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Console mode
- DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
- DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
---- a/dm/games/01006BB00C6F0000/game.tsv	2026-10-26 02:04:04.736830600 +0100
-+++ b/dm/games/01006BB00C6F0000/game.tsv	2026-10-26 02:04:05.065340800 +0100
-@@ -21,6 +21,9 @@
+diff --git a/dm/games/01006BB00C6F0000/game.tsv b/dm/games/01006BB00C6F0000/game.tsv
+index 1da091d..8d9f28c 100644
+--- a/dm/games/01006BB00C6F0000/game.tsv
++++ b/dm/games/01006BB00C6F0000/game.tsv
+@@ -21,6 +21,9 @@ package	v131072
  shader_versions	v131072
  
  # ---- Files ----
@@ -39,9 +12,44 @@
  modules	main subsdk0 subsdk1 sdk
  romfs_marker	region_common/shader/postprocess.bfsha
  zip_store	.bfres:.bfstm:.bfsar:.webm:.metallib
---- a/dm/gfx/nvn/nvn_mtl.m	2026-10-26 02:04:04.832962700 +0100
-+++ b/dm/gfx/nvn/nvn_mtl.m	2026-10-26 02:04:05.094778700 +0100
-@@ -5187,6 +5187,20 @@
+diff --git a/dm/games/game.py b/dm/games/game.py
+index fdabd14..dee74ac 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -134,6 +134,8 @@ def header(g):
+     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
+     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
+     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
++    nbl = g.get('no_blur', '')   # nxkit: <fragment key>:<uniform slot>:<offset>[,<offset>...]: the floats zeroed in that uniform buffer for that shader's draws while the launcher's No blur is on (nvn_mtl.m nb_override)
++    if nbl and not re.fullmatch(r'[0-9a-f]{16}:\d+:0x[0-9a-f]+(,0x[0-9a-f]+)*', nbl): sys.exit(f'{g.id}: no_blur must be <fragment key>:<uniform slot>:<offset>[,<offset>...]: {nbl}')
+     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
+     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
+     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
+@@ -170,6 +172,7 @@ def header(g):
+          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
+          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
++         f'#define DM_GAME_NO_BLUR {q(nbl)}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+index c8b64b6..8259f8a 100644
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -13,6 +13,7 @@
+ DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=0	Game	Frame rate
+ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale
+ DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode
++DM_NO_BLUR	toggle	-	1	DM_GAME_NO_BLUR!=	Game	No blur	Removes the depth-of-field and tilt-shift blur.
+ DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
+ DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Game	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
+ DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Game	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 7c7fcfd..4bc7923 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -5619,6 +5619,20 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                      FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                  }
              }

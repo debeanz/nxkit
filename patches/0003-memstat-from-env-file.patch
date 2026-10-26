@@ -1,6 +1,8 @@
---- a/dm/host/memstat.m	2026-10-25 21:21:25.438224000 +0100
-+++ b/dm/host/memstat.m	2026-10-25 21:21:25.649670000 +0100
-@@ -102,7 +102,9 @@
+diff --git a/dm/host/memstat.m b/dm/host/memstat.m
+index b2e4f28..fbbaa97 100644
+--- a/dm/host/memstat.m
++++ b/dm/host/memstat.m
+@@ -102,7 +102,9 @@ static void *memstat_thread(void *p) {
      return NULL;
  }
  
@@ -11,7 +13,7 @@
      const char *p = getenv("DM_MEMSTAT");
      if (!p || !*p) return;
      char *path = strdup(p);
-@@ -111,6 +113,9 @@
+@@ -111,6 +113,9 @@ __attribute__((constructor)) static void memstat_start(void) {
  #endif
      pthread_t th; pthread_create(&th, NULL, memstat_thread, path); pthread_detach(th);
  }
@@ -21,13 +23,15 @@
  
  // ---------- Per-thread CPU: DM_THRCPU=<tsv path>[,interval in seconds (default 10)] (common to Mac / iOS; on iOS a relative name → the container's Documents) ----------
  // Every interval, walk all threads of this process (task_threads), take the thread name and user + system CPU time (ns) from THREAD_EXTENDED_INFO, and difference them by thread id:
---- a/dm/ios/Sources/main.m	2026-10-25 21:21:25.459917700 +0100
-+++ b/dm/ios/Sources/main.m	2026-10-25 21:21:25.677906900 +0100
-@@ -49,6 +49,7 @@
+diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
+index 070c4dc..87ea08a 100644
+--- a/dm/ios/Sources/main.m
++++ b/dm/ios/Sources/main.m
+@@ -49,6 +49,7 @@ static int boot_env(void) {
          }
      }
      setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what an env file set (Launcher.swift)
 +    { void dm_memstat_start(void); const char *ms = getenv("DM_MEMSTAT"); if (ms && *ms && *ms != '/') setenv("DM_MEMSTAT", [doc stringByAppendingPathComponent:@(ms)].fileSystemRepresentation, 1); dm_memstat_start(); }   // memstat.m: a relative name goes beside log.txt
-     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) setenv("MTL_HUD_ENABLED", "1", 0);   // Metal reads it when the process makes its first device (the early loading below may make it)
+     front_hud_env();   // before the early loading below can make a device
      // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
      // (or the launcher, which replaces this default before the game starts)

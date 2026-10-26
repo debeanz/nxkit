@@ -1,6 +1,8 @@
---- a/dm/gfx/tools/shader_split.py	2026-10-25 21:03:22.218252000 +0100
-+++ b/dm/gfx/tools/shader_split.py	2026-10-25 21:03:22.251372800 +0100
-@@ -44,7 +44,7 @@
+diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
+index 49f389b..318ad65 100644
+--- a/dm/gfx/tools/shader_split.py
++++ b/dm/gfx/tools/shader_split.py
+@@ -45,7 +45,7 @@
  #   With an update: give RomFS and main as comma-separated lists (base game first, e.g. data/v0/RomFS,data/v327680/RomFS); the output is the union of both versions (see main())
  #   Unity type trees need Unity's common string table, which is taken from the first main
  # Pair table: (vertex key, pixel key) of every BNSH variation (every Unity program); dmsh_build uses it to give vertex shaders the outputs their pixel shaders read but they do not write (see dmsh_build.py vs_pad)
@@ -9,7 +11,7 @@
  sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
  sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak
  GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
-@@ -1433,7 +1433,9 @@
+@@ -1491,7 +1491,9 @@ def unzs(path):
      fhd = d[4] if len(d) > 5 and d[:4] == bytes.fromhex('28b52ffd') else 0
      n, o = (0, 1, 2, 4)[fhd & 3], 6 - (fhd >> 5 & 1)   # dictionary ID size; it follows the window descriptor, which single-segment frames omit
      did = int.from_bytes(d[o:o + n], 'little')

@@ -1,16 +1,16 @@
 diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
-index dee2e10..09ee9e5 100644
+index 6e52253..c8b64b6 100644
 --- a/dm/games/settings.tsv
 +++ b/dm/games/settings.tsv
-@@ -10,6 +10,8 @@ DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=
- DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Render scale
- DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Frame buffering	May reduce stutter; adds display latency.
- DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Console mode
-+DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
-+DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
- DM_LANG	choice	languages	build:DM_LANG	languages>1	Game language
- DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	always	Frame-rate counter
- DM_METAL_HUD	toggle	-	0	always	Performance HUD
+@@ -14,6 +14,8 @@ DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=
+ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale
+ DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode
+ DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
++DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Game	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
++DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Game	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
+ DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language
+ DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	always	Game	Frame-rate counter
+ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
 diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 index c3ac8c1..3cb1b56 100644
 --- a/dm/ios/Sources/DmGamepad.m
@@ -35,7 +35,7 @@ index c3ac8c1..3cb1b56 100644
      for (int i = 0; i < 16; i++) if (_game[i]) {
          CGPoint p = [_game[i] locationInView:self];
 diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
-index d01c66d..d284031 100644
+index 9cd03ba..54f01df 100644
 --- a/dm/ios/Sources/front_ios.m
 +++ b/dm/ios/Sources/front_ios.m
 @@ -30,6 +30,7 @@ static UILabel *front_ios_fps_label(void);
@@ -85,7 +85,7 @@ index d01c66d..d284031 100644
 @@ -68,8 +91,12 @@ static void launcher_done(void) { [g_root startGame]; }
  - (void)startGame {
      if (self.game) return;
-     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) setenv("MTL_HUD_ENABLED", "1", 0);   // Metal reads it when a device is made: before the game view makes its own (an env file's DM_METAL_HUD sets it in main.m already)
+     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
 +    self.box = [[UIView alloc] initWithFrame:self.view.bounds];
 +    self.box.clipsToBounds = YES; self.box.backgroundColor = UIColor.blackColor;
 +    [self.view addSubview:self.box];
