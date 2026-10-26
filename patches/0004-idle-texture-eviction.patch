@@ -5,9 +5,9 @@
      defer_drain();
      defer_reset();
 +    { void tex_evict_idle_c(void); tex_evict_idle_c(); }   // nxkit: idle texture eviction (tex_evict_idle)
+     if (!g_warm_started && prepare_on()) shmap_load();   // the first submission: the prepare step (warm_start), before anything of it is encoded
      warm_claim();
      if (g_cb) MDIE("submit re-entered");
-     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
 @@ -2053,7 +2054,9 @@
      return r;
  }

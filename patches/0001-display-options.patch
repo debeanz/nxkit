@@ -4,7 +4,7 @@ index dee2e10..09ee9e5 100644
 +++ b/dm/games/settings.tsv
 @@ -10,6 +10,8 @@ DM_FPS_TARGET	choice	30=30 fps,60=60 fps	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=
  DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Render scale
- DM_PRESENT_SNAP	toggle	-	0	gfxapi:nvn	Frame buffering	May reduce stutter; adds display latency.
+ DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Frame buffering	May reduce stutter; adds display latency.
  DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Console mode
 +DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
 +DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
