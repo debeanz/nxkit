@@ -1,0 +1,197 @@
+diff --git a/dm/games/0100DCA0064A6000/game.tsv b/dm/games/0100DCA0064A6000/game.tsv
+index 2003f56..c77c39f 100644
+--- a/dm/games/0100DCA0064A6000/game.tsv
++++ b/dm/games/0100DCA0064A6000/game.tsv
+@@ -36,6 +36,8 @@ app_pool	0xCD500000
+ sys_resource	0x0
+ # the rewritten modules are larger than the default 64 MB of used memory
+ mem_used	0x4600000
++# nxkit: the launcher's Half-res textures on by default: at full size the next area's textures ran an 8 GB iPhone out of memory
++tex_half	on
+ 
+ # ---- Frame rate ----
+ # 60 fps (30 on the Switch): the frame limiter waits until 33.333 ms have passed since the frame started, a constant the host sets to 1000 / fps_target (hle_fpslock.c), and the game
+diff --git a/dm/games/game.py b/dm/games/game.py
+index dee74ac..a6aa452 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -134,6 +134,8 @@ def header(g):
+     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
+     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
+     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
++    thf = g.get('tex_half', 'off')   # nxkit: the launcher's Half-res textures default (nvn_mtl.m tex_half)
++    if thf not in ('on', 'off'): sys.exit(f'{g.id}: tex_half must be on or off: {thf}')
+     nbl = g.get('no_blur', '')   # nxkit: <fragment key>:<uniform slot>:<offset>[,<offset>...]: the floats zeroed in that uniform buffer for that shader's draws while the launcher's No blur is on (nvn_mtl.m nb_override)
+     if nbl and not re.fullmatch(r'[0-9a-f]{16}:\d+:0x[0-9a-f]+(,0x[0-9a-f]+)*', nbl): sys.exit(f'{g.id}: no_blur must be <fragment key>:<uniform slot>:<offset>[,<offset>...]: {nbl}')
+     api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
+@@ -173,6 +175,7 @@ def header(g):
+          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
+          f'#define DM_GAME_NO_BLUR {q(nbl)}',
++         f'#define DM_GAME_TEX_HALF {int(thf == "on")}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+index 8259f8a..c68320d 100644
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -23,6 +23,7 @@ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
+ DM_RUMBLE	toggle	-	1	always	Controls	Game rumble
+ DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength
+ DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
++DM_TEX_HALF	toggle	-	DM_GAME_TEX_HALF	gfxapi:nvn	Performance	Half-res textures	Saves memory; textures look blurrier.
+ DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
+ DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
+ DM_NVN_ENC_THREAD	toggle	-	1	gfxapi:nvn	Performance	Encode thread
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 04288f1..f0dc20b 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -1539,6 +1539,26 @@ static int pkg_edges_clean(NvPkg *pk, const tex_t *t) {   // the covered pages w
+     pk->stamp = st; g_pkg_edge_skips++;
+     return 1;
+ }
++// nxkit: half-resolution textures (the launcher's Half-res textures, DM_TEX_HALF; the profile key tex_half sets its default). An ASTC 2D / 2D-array texture of at least 256x256 with
++// mipmaps is made without its top level: half the width and height, a quarter of the memory, and the game's level n is Metal level n - 1 (tex_half). Uploads and copies into level 0
++// are dropped, views and copies of the other levels move down one. ASTC only: nothing draws into it (BC textures can be render targets through a shadow, bcrt_attach). Not sparse
++// textures (their view follows the mapped levels, sparse_view) nor image (shader-write) ones. Made for Luigi's Mansion 3, which ran the iPhone out of memory loading its next area
++int nvn_sparse_pool(const void *pool);
++static uint64_t g_half_n, g_half_bytes, g_half_drop;
++static int tex_half_on(void) {
++    static int v = -1;
++    if (v < 0) { const char *e = getenv("DM_TEX_HALF"); v = e && *e ? atoi(e) != 0 : DM_GAME_TEX_HALF;
++        MLOG("half-res textures (DM_TEX_HALF): %s", v ? "on: ASTC textures of 256x256 or more with mipmaps are made without their top level" : "off"); }
++    return v;
++}
++static int tex_half_want(const tex_t *t, MTLPixelFormat pf) {
++    return (t->d.target == 1 || t->d.target == 4) && t->d.levels > 1 && t->d.width >= 256 && t->d.height >= 256 && t->d.samples <= 1 && !(t->d.flags & NVN_TEXTURE_FLAGS_IMAGE)
++        && pf >= MTLPixelFormatASTC_4x4_sRGB && pf <= MTLPixelFormatASTC_12x12_HDR && !(t->pool && nvn_sparse_pool(t->pool)) && tex_half_on();
++}
++// Whether mt is t's texture made without its top level (Metal level = the game's level - 1; the game's level 0 has no storage). A view never is one
++static int tex_half(const tex_t *t, id<MTLTexture> mt) {
++    return t && mt && !mt.parentTexture && (t->d.target == 1 || t->d.target == 4) && t->d.levels > 1 && mt.mipmapLevelCount + 1 == t->d.levels;
++}
+ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
+     uint32_t pf = 0; uint8_t swz[4];
+     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
+@@ -1574,6 +1594,14 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
+     // Mansion 3), and upgrading later would recreate a depth buffer in use. Unlike colour formats it costs nothing measured: on an M4 Pro a 2560x1440 one has the same allocated size and the same
+     // GPU time over eight load / store passes with and without it
+     if (d.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) d.usage |= MTLTextureUsagePixelFormatView;
++    if (d.mipmapLevelCount > 1 && d.mipmapLevelCount == t->d.levels && tex_half_want(t, d.pixelFormat)) {   // nxkit: half-res textures (above)
++        int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
++        uint64_t top = bpb && bw && bh ? (uint64_t)((t->d.width + bw - 1) / bw) * ((t->d.height + bh - 1) / bh) * bpb * d.arrayLength : 0;
++        d.width = MAX(d.width >> 1, 1u); d.height = MAX(d.height >> 1, 1u); d.mipmapLevelCount -= 1;
++        g_half_n++; g_half_bytes += top;
++        if (g_half_n <= 3 || g_half_n % 500 == 0) MLOG("half-res textures: %llu so far, %llu MB saved (ser=%llu %ux%u format %#x levels %u -> %lux%lu)", (unsigned long long)g_half_n, (unsigned long long)(g_half_bytes >> 20),
++                                                     (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, t->d.levels, (unsigned long)d.width, (unsigned long)d.height);
++    }
+     return d;
+ }
+ // In-place upgrade: when the original texture was not created with PixelFormatView (off by default, to keep Apple GPU lossless compression) but a different-format view is needed, create a new one with the original spec + PixelFormatView, copy over every slice × level, and replace the registration.
+@@ -1880,6 +1908,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+                         ? reuse : [g_dev newTextureWithDescriptor:d];
+     if (!mt) { RED_ONCE(2, "failed to create MTLTexture %ux%u format %#x target %d", t->d.width, t->d.height, t->d.format, t->d.target); return nil; }
+     if (g_allocprof > 0) { static int n; if (n++ < 30 || n % 500 == 0) MLOG("new texture (%s) #%d ser=%llu %ux%ux%u format %#x target %d levels %u storage %p", __func__, n, (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels, (void *)t->mem); }
++    unsigned h0 = (unsigned)tex_half(t, mt);   // nxkit: half-res textures: the game's level l goes to Metal level l - h0, level 0 is not uploaded
+     res_add(mt);   // Both first upload and re-upload register residency here (Metal 4 does not make resources resident automatically; a missed registration = GPU address page fault)
+     int sparse = t->pool && nvn_sparse_pool(t->pool);
+     if (stamp) {   // no stamp: a one-time upload of content the CPU will not change (tex_init_fill), with no write tracking
+@@ -1888,7 +1917,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+     unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // a cube array's depth counts layer-faces (tex_desc)
+     size_t total = 0;
+-    for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
++    for (unsigned l = h0; l < d.mipmapLevelCount + h0; l++) {
+         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
+         total += (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
+     }
+@@ -1902,13 +1931,13 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+         size_t stg_off;
+         id<MTLBuffer> stg = up_alloc(total ? total : 16, &stg_off);
+         size_t off = 0; int enc_ok = g_up_ce != nil, nb0 = g_nup_blits;
+-        for (unsigned l = 0; enc_ok && l < d.mipmapLevelCount; l++) {
++        for (unsigned l = h0; enc_ok && l < d.mipmapLevelCount + h0; l++) {
+             uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
+             size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
+             for (unsigned y = 0; y < layers; y++) {
+                 size_t poff; id<MTLBuffer> params = up_param_alloc(&poff);   // Metal 4 has no setBytes: the parameter block of each deswizzle is cut from a shared block (no new GPU buffer each time)
+                 if (nvn_deswz_gpu_encode_m4(g_up_ce, g_up_ct, params, poff, (__bridge id<MTLBuffer>)mb, mo, &t->d, l, y, stg, stg_off + off, pitch)) { enc_ok = 0; break; }
+-                up_blit_add(stg, stg_off + off, pitch, pitch * rows, MTLSizeMake(w, h, z), mt, y, l);
++                up_blit_add(stg, stg_off + off, pitch, pitch * rows, MTLSizeMake(w, h, z), mt, y, l - h0);
+                 off += pitch * rows * z;
+             }
+         }
+@@ -1933,7 +1962,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+     res_add(stg); [g_up_keep addObject:stg];
+     size_t off = 0;
+     int zb = zblock_on() && t->d.format >= 0x79 && t->d.format <= 0x94; if (zb) { g_zb_ser = t->serial; g_zb_n = (int)MIN(d.mipmapLevelCount, 16u); memset(g_zb, 0, sizeof g_zb); memset(g_zb_tot, 0, sizeof g_zb_tot); }
+-    for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
++    for (unsigned l = h0; l < d.mipmapLevelCount + h0; l++) {
+         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
+         size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
+         for (unsigned y = 0; y < layers; y++) {
+@@ -1941,7 +1970,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+             if (zb && l < 16) { const uint64_t *q = (const uint64_t *)((const uint8_t *)stg.contents + off); size_t nb = pitch * rows * z / 16;
+                 for (size_t i = 0; i < nb; i++) g_zb[l] += !(q[2 * i] | q[2 * i + 1]);
+                 g_zb_tot[l] += (uint32_t)nb; }
+-            up_blit_add(stg, off, pitch, pitch * rows, MTLSizeMake(w, h, z), mt, y, l);
++            up_blit_add(stg, off, pitch, pitch * rows, MTLSizeMake(w, h, z), mt, y, l - h0);
+             off += pitch * rows * z;
+         }
+     }
+@@ -3699,6 +3728,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
+             sg = g_ser_gen;
+         }
+         NSUInteger l0 = r.v.set_levels ? r.v.base_level : 0, nl = r.v.set_levels && r.v.nlevels ? r.v.nlevels : base.mipmapLevelCount - l0;
++        if (tex_half(&rp->t, base)) { if (l0) { l0--; if (!(r.v.set_levels && r.v.nlevels)) nl = base.mipmapLevelCount - l0; } else if (r.v.set_levels && r.v.nlevels > 1) nl--; }   // nxkit: half-res textures
+         if (l0 >= base.mipmapLevelCount) { RED_ONCE(109, "texture view id %d starts at mip %lu beyond %lu levels", tid, (unsigned long)l0, (unsigned long)base.mipmapLevelCount); return nil; }
+         // A level count past the texture's levels is cut to those it has, as deko3d's Tegra descriptor writer clips the maximum level (Echoes of Wisdom: levels 1 + 7 of a seven-level texture,
+         // which Metal's validation refuses)
+@@ -8238,6 +8268,7 @@ static void copy_t2b(const p_copy_b2t *c) {
+     if (!t) return;
+     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
+     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
++    if (tex_half(c->tex, t)) { if (!level) { RED_ONCE(87, "texture-to-buffer copy from the top level of a half-res texture (ser=%llu): not copied", (unsigned long long)c->tex->serial); return; } level--; }   // nxkit
+     size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
+     size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
+     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
+@@ -8281,6 +8312,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+     @autoreleasepool {
+     id<MTLTexture> mt = tex_mtl(t);
+     if (!mt) { memset(dst, 0, img * nz); return; }
++    if (tex_half(t, mt)) { if (!level) { RED_ONCE(95, "CPU readback of the top level of a half-res texture (ser=%llu): read as 0", (unsigned long long)t->serial); memset(dst, 0, img * nz); return; } level--; }   // nxkit
+     mtl_finish_gpu_at(WS_READTEX);
+     id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
+     id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
+@@ -8297,6 +8329,7 @@ static void copy_b2t(const p_copy_b2t *c) {
+     if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
+     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
+     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
++    if (tex_half(c->tex, t)) { if (!level) { g_half_drop++; return; } level--; }   // nxkit: half-res textures: the top level has no storage; the others are one level down
+     size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
+     size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
+     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
+@@ -8423,6 +8456,8 @@ static void copy_t2t(const p_copy_t2t *c) {
+     if (!s || !d) return;
+     unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
+     unsigned sz0 = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, dz0 = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
++    if (tex_half(c->dst, d)) { if (!dl) { g_half_drop++; return; } dl--; }   // nxkit: half-res textures (tex_desc)
++    if (tex_half(c->src, s)) { if (!sl) { RED_ONCE(103, "texture copy from the top level of a half-res texture (ser=%llu): not copied", (unsigned long long)c->src->serial); return; } sl--; }
+     if (c->flags & DM_COPY_RESOLVE) {   // Downsample: multisample resolve into the single-sample destination (depth takes sample 0); with equal sample counts it is a plain whole copy
+         if (s.sampleCount == d.sampleCount && s.pixelFormat == d.pixelFormat && s.width == d.width && s.height == d.height) {
+             enc_b_copy_texture(blit(), s, sz0, sl, MTLOriginMake(0, 0, 0), MTLSizeMake(s.width, s.height, 1), d, dz0, dl, MTLOriginMake(0, 0, 0));
+diff --git a/dm/tools/tests/test_launcher_settings.py b/dm/tools/tests/test_launcher_settings.py
+index e2ce418..3d5d486 100644
+--- a/dm/tools/tests/test_launcher_settings.py
++++ b/dm/tools/tests/test_launcher_settings.py
+@@ -12,7 +12,7 @@ settings = importlib.util.module_from_spec(spec)
+ spec.loader.exec_module(settings)
+ 
+ BOTW, WONDER = '01007EF00011E000', '010015100B514000'
+-PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
++PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_TEX_HALF', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+ 
+ 
+ def build(gid, api):

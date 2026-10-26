@@ -77,6 +77,10 @@ the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nx
 - **Idle render targets dropped** (testing, Luigi's Mansion 3): render targets nothing drew into or sampled for
   64 submissions (about a quarter second) are dropped too; dynamic resolution left a full set of them behind at
   every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off.
+- **Half-res textures** (launcher switch under Performance; on by default for Luigi's Mansion 3, profile key `tex_half`): ASTC
+  textures of 256x256 or more with mipmaps are made without their top level, so they take a quarter of the memory and look a
+  little blurrier. Textures the game draws into are never changed. `DM_TEX_HALF=0` / `1` in `env.txt` overrides the switch; the
+  log line `half-res textures:` shows how much it saved.
 - **Movie events outside the decoder lock** (Kirby's guide movies): the host signalled a video decoder's
   events while holding its lock; a same-core wake handed the core to the thread waiting for that lock, and the
   game stopped (sound went on). The events are signalled after the lock is released.
