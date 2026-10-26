@@ -57,6 +57,10 @@ Options: `-p v589824` (version to pack), `--app-name`, `-l ja` (language), `--no
 counter), `-o out.ipa`, `--keep-extracted` (keep the extracted files to rebuild faster), `--nxnative-ref` (the nxnative commit to build with: by default the one
 nxkit's patches are made for; `main` takes the newest, which the patches may not apply to yet).
 
+Deleted the NSPs? `py nxkit.py rebuild "F:\Switch\Hades"` builds the app again for nxkit's or nxnative's app changes from what the last
+build kept in `<title ID>_build` (the rewritten code, the shader split) and the game files inside the last IPA, which it replaces. The
+code is not rewritten again, so changes to nxnative's code rewriter or a game's code patches still need the NSPs (`game`).
+
 ## nxkit's changes to nxnative
 
 The cloud build applies the patches in `patches/` to nxnative before compiling the app (they are made for
@@ -84,9 +88,15 @@ the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nx
 - **Movie events outside the decoder lock** (Kirby's guide movies): the host signalled a video decoder's
   events while holding its lock; a same-core wake handed the core to the thread waiting for that lock, and the
   game stopped (sound went on). The events are signalled after the lock is released.
-- **No blur** (Link's Awakening): a launcher switch, on by default. For the game's depth-of-field / tilt-shift
-  composite only, the host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it
-  outputs the sharp frame; the game's own data is not touched. Profile key `no_blur`.
+- **No blur** (Link's Awakening): always on. For the game's depth-of-field / tilt-shift composite only, the
+  host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it outputs the sharp
+  frame; the game's own data is not touched. Profile key `no_blur`; `DM_NO_BLUR=0` in `env.txt` turns it off.
+- **Layer crop** (Link's Awakening, handheld): a game that crops its display layer (`vi::SetLayerCrop`) instead
+  of its NVN window is shown cropped; Link's Awakening draws handheld frames into 1280x720 of a 1920x1080
+  texture, which showed small in a corner.
+- **Keep 60 fps** (Link's Awakening, profile key `keep_60`): the game switches itself to 30 fps after a few
+  late frames, and the phone then lowers its clocks so it never gets back; its request is not followed.
+  `DM_KEEP_60=0` follows it again.
 - **Kirby and the Forgotten Land** (testing): the shader split reads Kirby's `.cmp` files (a size, then
   zstd), and a 60 fps patch for 1.1.0's frame pacer (one 1/60 s period per frame instead of two; the game
   steps by the measured time, so its speed stays right).

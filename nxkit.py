@@ -400,6 +400,15 @@ def game_cmd(a):
     info = prepare(repo, commit, a.nsp_dir, a.keys, kit_zip, a.package, a.app_name, a.language, a.bundle_id, not a.no_fps)
     encrypt(kit_zip, kit_enc, cfg['password']); kit_zip.unlink()
     say(f'encrypted build kit: {kit_enc.stat().st_size / 2 ** 20:.0f} MB')
+    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge(slim, info['romfs'], info['aoc'], info['zip_store'], a.out or info['ipa']))
+    say(f'done: {a.out or info["ipa"]}')
+    if not a.keep_extracted:
+        say(f'deleting the extracted game files: {Path(info["work"]) / "extract"}'); B_rm(Path(info['work']) / 'extract')
+
+
+def cloud_ipa(cfg, home, kit_enc, tag, commit, finish):
+    """The cloud part of a build: uploads the encrypted kit, runs the workflow and waits for it, downloads and decrypts the slim IPA and hands it to finish(slim);
+    the kit's release and the run's artifacts are deleted"""
     slug = cfg['repo']
     try:
         gh('release', 'create', tag, kit_enc, '--repo', slug, '--prerelease', '--title', tag, '--notes', 'Encrypted nxkit build kit; the build deletes it.')
@@ -420,16 +429,86 @@ def game_cmd(a):
         gh('run', 'download', run_id, '--repo', slug, '--name', 'ipa', '--dir', dl)
         slim = dl / 'slim.ipa'
         decrypt(dl / 'slim.ipa.nxk', slim, cfg['password'])
-        merge(slim, info['romfs'], info['aoc'], info['zip_store'], a.out or info['ipa'])
+        finish(slim)
         B_rm(dl)
         for art in json.loads(gh('api', f'repos/{slug}/actions/runs/{run_id}/artifacts', capture=True))['artifacts']:
             gh('api', '-X', 'DELETE', f'repos/{slug}/actions/artifacts/{art["id"]}')
     finally:
         subprocess.run(['gh', 'release', 'delete', tag, '--repo', slug, '--yes', '--cleanup-tag'], capture_output=True)   # the workflow deletes it first; this covers a failed start
         kit_enc.unlink(missing_ok=True)
-    say(f'done: {a.out or info["ipa"]}')
-    if not a.keep_extracted:
-        say(f'deleting the extracted game files: {Path(info["work"]) / "extract"}'); B_rm(Path(info['work']) / 'extract')
+
+
+def merge_from_ipa(slim, old, store, out):
+    """As merge, with the RomFS and add-on content taken from an earlier IPA of the same game (its NSPs gone): the slim IPA's entries, then the old IPA's romfs/ and aoc/ entries"""
+    store = tuple(s.lower() for s in (store or '').split(':') if s)
+    out = Path(out); tmp = out.with_name(out.name + '.partial')
+    t0, shown, done = time.time(), 0, 0
+
+    def copy(zin, info, z):
+        zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+        zi.create_system, zi.external_attr, zi.compress_level = info.create_system, info.external_attr, 6
+        zi.compress_type = zipfile.ZIP_STORED if info.is_dir() or info.filename.lower().endswith(store) else zipfile.ZIP_DEFLATED
+        if info.is_dir(): z.writestr(zi, b''); return
+        with zin.open(info) as f, z.open(zi, 'w', force_zip64=info.file_size >= 1 << 31) as o: shutil.copyfileobj(f, o, 16 << 20)
+
+    with zipfile.ZipFile(slim) as zs, zipfile.ZipFile(old) as zo, zipfile.ZipFile(tmp, 'w', allowZip64=True) as z:
+        game = [i for i in zo.infolist() if i.filename.startswith((APP + 'romfs/', APP + 'aoc/'))]
+        if not any(i.filename.startswith(APP + 'romfs/') and not i.is_dir() for i in game): raise KitError(f'{old} holds no game files ({APP}romfs/)')
+        total = sum(i.file_size for i in game)
+        for info in zs.infolist():
+            if not info.filename.startswith((APP + 'romfs/', APP + 'aoc/')): copy(zs, info, z)
+        for info in game:
+            copy(zo, info, z); done += info.file_size
+            if time.time() - shown > 10: shown = time.time(); say(f'merge: {done / 2 ** 30:.1f} of {total / 2 ** 30:.1f} GB')
+    tmp.replace(out)
+    say(f'merged in {time.time() - t0:.0f} s: {out} ({out.stat().st_size / 2 ** 30:.2f} GB)')
+
+
+# ---- PC: a game's IPA again without its NSPs ----
+def rebuild_cmd(a):
+    """Builds the IPA again from what the last build kept in <id>_build (the rewritten code modules, the shader split) and the last IPA (the game files, the icon), with
+    nxnative and patches/ as they are now: for changes to the app (host, launcher, game profile keys). The code is not rewritten, so it holds while nxnative's rewriter and the
+    game's code patches are unchanged since that build; a changed game profile key reaches the app, a changed rewriter cut does not"""
+    cfg = load_config(); home = Path(cfg['home'])
+    tool_env(home)
+    folder = Path(a.nsp_dir).resolve()
+    found = sorted(folder.glob('*_build/nxkit.json'))
+    if not found: raise KitError(f'no earlier build in {folder} (<title ID>_build/nxkit.json)')
+    work = found[0].parent; info = json.loads(found[0].read_text())
+    old = Path(a.ipa).resolve() if a.ipa else folder / Path(info['ipa']).name
+    if not old.is_file(): raise KitError(f'no IPA to take the game files from: {old} (give --ipa)')
+    if info['gfx'] != 'nvn': raise KitError('rebuild handles NVN games only (other games\' shaders come from their RomFS)')
+    patched, pkg = work / f'patched_{info["package"]}', work / 'shader/pkg'
+    for d in (patched, pkg):
+        if not d.is_dir(): raise KitError(f'{d} from the last build is missing: build with the NSPs (game)')
+    repo, commit = checkout(home, a.nxnative_ref)
+    say(f'nxnative {commit[:10]} (last build {info["nxnative_commit"][:10]}); code and shaders of the last build, game files from {old.name}')
+    B, gamemod, pg, nacp = load_nxnative(repo)
+    if info['derived'] and (work / 'profile' / info['game']).is_dir():
+        os.environ['DM_GAMES_DIR'] = games_dir(work / 'profile'); os.environ['DM_GAMES_FIRST'] = '1'
+    g = gamemod.load(info['game'])
+    out_dir = home / 'kits'; out_dir.mkdir(parents=True, exist_ok=True)
+    tag = f'kit-{time.strftime("%Y%m%d-%H%M%S")}-{secrets.token_hex(3)}'
+    kit_zip, kit_enc = out_dir / f'{tag}.zip', out_dir / f'{tag}.nxk'
+    kit = work / 'kit'; B.rmtree(kit); kit.mkdir()
+    shutil.copytree(patched, kit / 'patched')
+    if info['derived']: shutil.copytree(g.dir, kit / 'profile' / g.id)
+    marker = kit / 'game/RomFS' / g.get('romfs_marker'); marker.parent.mkdir(parents=True, exist_ok=True); marker.write_text('nxkit stub; the real file is merged on the PC\n')
+    shutil.copytree(pkg, kit / 'shader/pkg')
+    icon = False
+    with zipfile.ZipFile(old) as z:   # the old app's largest icon (152x152; the 256x256 original was in the NSP's control data)
+        names = set(z.namelist())
+        for n in (APP + 'AppIcon76x76@2x~ipad.png', APP + 'AppIcon60x60@2x.png'):
+            if n in names: (kit / 'game/icon.jpg').write_bytes(z.read(n)); icon = True; break
+    meta = {k: info[k] for k in ('game', 'title', 'package', 'gfx', 'derived', 'app_name', 'bundle_id', 'app_version', 'language', 'show_fps')}
+    meta.update(nxnative_commit=commit, icon=icon)
+    (kit / 'meta.json').write_text(json.dumps(meta, indent=1))
+    zip_dir(kit, kit_zip); B.rmtree(kit)
+    encrypt(kit_zip, kit_enc, cfg['password']); kit_zip.unlink()
+    say(f'encrypted build kit: {kit_enc.stat().st_size / 2 ** 20:.0f} MB')
+    out = Path(a.out).resolve() if a.out else old
+    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge_from_ipa(slim, old, info['zip_store'], out))
+    say(f'done: {out}')
 
 
 def fetch_logs(slug, run_id, dst, password):
@@ -490,6 +569,10 @@ def main(argv=None):
     s.add_argument('--no-fps', action='store_true', help='hide the frame-rate counter')
     s.add_argument('--keep-extracted', action='store_true', help='keep the extracted game files (faster next build of the same game)')
     s.add_argument('--nxnative-ref', help='nxnative commit or branch (default: the commit the patches are made for; main: the newest)')
+    s = sub.add_parser('rebuild', help='build a game\'s IPA again without its NSPs, from the last build\'s files and IPA')
+    s.add_argument('nsp_dir', help='the game\'s folder (with <title ID>_build from the last build)')
+    s.add_argument('--ipa', help='the IPA to take the game files from (default: the last build\'s)'); s.add_argument('-o', '--out', help='output IPA (default: replaces that IPA)')
+    s.add_argument('--nxnative-ref', help='nxnative commit or branch (default: the commit the patches are made for; main: the newest)')
     s = sub.add_parser('prepare', help='PC step: the build kit (unencrypted zip)')
     s.add_argument('repo'); s.add_argument('nsp_dir'); s.add_argument('-k', '--keys', required=True); s.add_argument('-o', '--out', required=True)
     s.add_argument('-p', '--package'); s.add_argument('--app-name'); s.add_argument('--bundle-id'); s.add_argument('-l', '--language')
@@ -504,6 +587,7 @@ def main(argv=None):
     try:
         if a.cmd == 'setup': setup_cmd(a)
         elif a.cmd == 'game': game_cmd(a)
+        elif a.cmd == 'rebuild': rebuild_cmd(a)
         elif a.cmd == 'prepare':
             repo = Path(a.repo).resolve()
             commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
