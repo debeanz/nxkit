@@ -79,6 +79,9 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
 - **Idle render targets dropped** (testing, Luigi's Mansion 3): render targets nothing drew into or sampled for
   64 submissions (about a quarter second) are dropped too; dynamic resolution left a full set of them behind at
   every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off.
+- **Movie events outside the decoder lock** (Kirby's guide movies): the host signalled a video decoder's
+  events while holding its lock; a same-core wake handed the core to the thread waiting for that lock, and the
+  game stopped (sound went on). The events are signalled after the lock is released.
 - **No blur** (Link's Awakening): a launcher switch, on by default. For the game's depth-of-field / tilt-shift
   composite only, the host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it
   outputs the sharp frame; the game's own data is not touched. Profile key `no_blur`.

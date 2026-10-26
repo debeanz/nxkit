@@ -1,0 +1,37 @@
+--- a/dm/host/hle_movie.c	2026-10-26 02:53:36.123447700 +0100
++++ b/dm/host/hle_movie.c	2026-10-26 02:53:45.871888000 +0100
+@@ -403,6 +403,10 @@
+ }
+ // while packets are queued and an output slot is free, decode the head packet, until the queue is empty or every slot is taken; signal the input / output events by the result
+ static void md_pump(mdec_t *d) {
++    // nxkit: the events are signalled after dmu is released. SignalEvent is guest code that wakes a guest thread, and a same-core wake hands the core over (dm_yield_to_core_peers):
++    // Kirby and the Forgotten Land's worker returned an output, signalled holding dmu and waited for its core, while the peer it handed it to (MovieVideoInputReadThread, in
++    // SendInputBufferForDecode → md_pump) waited for dmu: the whole game stopped at its first guide movie (sound went on)
++    int sig_in = 0, sig_out = 0;
+     pthread_mutex_lock(&d->dmu);
+     for (;;) {
+         pthread_mutex_lock(&d->mu);
+@@ -415,7 +419,7 @@
+             d->out[s].pic = got; d->out[s].pts = got ? d->jpts_out : 0; d->out[s].flags = left ? 0 : 4; d->outq[d->noutq++] = s;
+             if (!left) d->avc_drain = 0;
+             pthread_mutex_unlock(&d->mu);
+-            md_event(d, 1);
++            sig_out = 1;
+             continue;
+         }
+         int slot = -1;
+@@ -441,10 +445,12 @@
+         if (more) d->avc_drain = 1;
+         int ineos = d->in_eos;
+         pthread_mutex_unlock(&d->mu);
+-        if (!ineos) md_event(d, 0);   // no input is announced after an end-of-stream packet (h_movie_AcqIn)
+-        if (ready) md_event(d, 1);
++        if (!ineos) sig_in = 1;   // no input is announced after an end-of-stream packet (h_movie_AcqIn)
++        if (ready) sig_out = 1;
+     }
+     pthread_mutex_unlock(&d->dmu);
++    if (sig_in) md_event(d, 0);
++    if (sig_out) md_event(d, 1);
+ }
+ 
+ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "movie decoder: host implementation (no NVIDIA hardware decoder; VP9 with libvpx, AVC with VideoToolbox)",
