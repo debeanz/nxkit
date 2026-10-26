@@ -84,6 +84,9 @@ General, every game:
   on; found on Kirby's guide movies). The events are signalled after the lock is released.
 - **Encode thread off**: nxnative's Encode thread (Metal encoding on a thread of its own) is off by default and no
   longer in the launcher; games ran worse with it on the iPhone. `DM_NVN_ENC_THREAD=1` in `env.txt` turns it on.
+- **3D textures in 2D slots**: a shader that reads a 3D texture through a 2D slot (on the Switch: its first depth plane;
+  on Metal an undefined read) gets a 2D copy of that plane, refreshed each submission. Kirby's menus, HUD and text
+  multiply in such a texture and parts of them were invisible.
 
 Kirby and the Forgotten Land (`patches/01004D300C5AE000`, testing):
 
