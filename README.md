@@ -76,6 +76,9 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
   packaged texture, or one on a CPU_NO_ACCESS pool) gives that memory back to iOS once the GPU copy is made,
   instead of holding the texture twice; packaged textures stay watched for new writes, which re-upload them. `DM_NVN_GUEST_RELEASE=0` turns it off; the log line
   `guest texture copies released:` shows how much it saved.
+- **No blur** (Link's Awakening): a launcher switch, on by default. For the game's depth-of-field / tilt-shift
+  composite only, the host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it
+  outputs the sharp frame; the game's own data is not touched. Profile key `no_blur`.
 - **Kirby and the Forgotten Land** (testing): the shader split reads Kirby's `.cmp` files (a size, then
   zstd), and a 60 fps patch for 1.1.0's frame pacer (one 1/60 s period per frame instead of two; the game
   steps by the measured time, so its speed stays right).
