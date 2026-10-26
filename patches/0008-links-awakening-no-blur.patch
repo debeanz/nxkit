@@ -46,10 +46,10 @@ index c8b64b6..8259f8a 100644
  DM_IOS_RES	choice	0=Native,1080=1920x1080,900=1600x900,720=1280x720	0	always	Game	Resolution	The size the picture is scaled to on screen; the game itself draws at its console mode's size.
  DM_IOS_SCALING	choice	fit=Fit (16:9),stretch=Stretch (full screen),1943=Stretch 1.943:1,zoom=Zoom (full screen)	fit	always	Game	Screen Scaling	Stretch widens the picture out of shape; Zoom fills the screen and cuts the top and bottom.
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index 7c7fcfd..4bc7923 100644
+index 03fb0d1..3c2f772 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
-@@ -5619,6 +5619,20 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
+@@ -5571,6 +5571,20 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                      FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                  }
              }

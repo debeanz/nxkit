@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index 4bc7923..91584eb 100644
+index 3c2f772..04288f1 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
-@@ -3503,11 +3503,21 @@ static void ev_hot_add(CFMutableSetRef hot, void *v) { if (v) CFSetAddValue(hot,
+@@ -3455,11 +3455,21 @@ static void ev_hot_add(CFMutableSetRef hot, void *v) { if (v) CFSetAddValue(hot,
  static int ev_in(CFMutableSetRef set, void *v) { return v && CFSetContainsValue(set, (__bridge const void *)ev_base((__bridge id<MTLTexture>)v)); }
  static void tex_evict_idle(void) {
      static long idle = -1; if (idle < 0) { const char *e = getenv("DM_NVN_EVICT_IDLE"); idle = e ? atol(e) : 1800; if (idle > 0) MLOG("idle texture eviction: on (rebuildable textures unused for %ld submissions; DM_NVN_EVICT_IDLE=0 turns it off)", idle); }
@@ -27,7 +27,7 @@ index 4bc7923..91584eb 100644
      pthread_mutex_lock(&g_smu);
      enum { EV_MAX = 512 }; alias_key *ks = malloc(EV_MAX * sizeof *ks); void **vs = malloc(EV_MAX * sizeof *vs); uint32_t n = 0;
      uint64_t kept_hot = 0, kept_rt = 0, kept_cpu = 0, kept_dst = 0, bytes = 0;
-@@ -3517,7 +3527,13 @@ static void tex_evict_idle(void) {
+@@ -3469,7 +3479,13 @@ static void tex_evict_idle(void) {
          id<MTLTexture> o = (__bridge id<MTLTexture>)v;
          alias_key k; memcpy(&k, g_alias.keys + (size_t)i * g_alias.klen, sizeof k);
          const pool_t *pl = (const pool_t *)(uintptr_t)k.pool;
@@ -42,7 +42,7 @@ index 4bc7923..91584eb 100644
          if (!pl || !(pl->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) || (pl->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL)) { kept_cpu += o.allocatedSize; continue; }
          if (g_gpu_dst && CFSetContainsValue(g_gpu_dst, v)) { kept_dst += o.allocatedSize; continue; }
          uint64_t last = (uint64_t)(uintptr_t)nvn_hm_get(&g_evu, &v);
-@@ -3559,10 +3575,10 @@ static void tex_evict_idle(void) {
+@@ -3511,10 +3527,10 @@ static void tex_evict_idle(void) {
      }
      pthread_mutex_unlock(&g_smu);
      os_unfair_lock_unlock(&g_rmu);
