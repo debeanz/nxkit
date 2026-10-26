@@ -103,6 +103,14 @@ The Legend of Zelda: Link's Awakening (`patches/01006BB00C6F0000`):
 - **Keep 60 fps**: the game switches itself to 30 fps after a few late frames, and the phone then lowers its
   clocks so it never gets back; its request is not followed. `DM_KEEP_60=0` follows it again.
 
+NieR:Automata (`patches/010056B015FE8000`, testing):
+
+- **Geometry draws batched**: Metal has no geometry stage, so nxnative runs each geometry-shader draw as a vertex capture
+  pass and a compute pass and then draws the result, ending the render pass every time. NieR draws its lights about 80 times
+  a frame that way, and each one stored and reloaded the 1280x720 targets (about half of a 45 ms GPU frame). A run of
+  consecutive geometry draws now shares one capture pass, one compute pass and one render pass. Profile key `geo_batch`;
+  `DM_NVN_GEO_BATCH=0` in `env.txt` turns it off; the log line `geometry batching:` shows how many draws a batch holds.
+
 Luigi's Mansion 3 (`patches/0100DCA0064A6000`, testing, against running out of memory):
 
 - **Idle texture eviction**: GPU copies of compressed textures on GPU-only pools that nothing used for about
