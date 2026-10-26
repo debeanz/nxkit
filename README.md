@@ -72,9 +72,9 @@ The cloud build applies the patches in `patches/` to nxnative before compiling t
   GPU-only pools that nothing used for about 7 seconds are dropped and rebuilt from game memory when
   needed again, so games that never free their textures don't run the iPhone out of memory.
   `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off; the log line `idle texture eviction:` shows what it freed.
-- **Guest texture copies released** (testing, Luigi's Mansion 3): a texture uploaded from memory the game's
-  CPU may not touch (a CPU_NO_ACCESS pool) gives that memory back to iOS once the GPU copy is made, instead
-  of holding the texture twice. `DM_NVN_GUEST_RELEASE=0` turns it off; the log line
+- **Guest texture copies released** (testing, Luigi's Mansion 3): a texture uploaded from game memory (a
+  packaged texture, or one on a CPU_NO_ACCESS pool) gives that memory back to iOS once the GPU copy is made,
+  instead of holding the texture twice; packaged textures stay watched for new writes, which re-upload them. `DM_NVN_GUEST_RELEASE=0` turns it off; the log line
   `guest texture copies released:` shows how much it saved.
 - **Kirby and the Forgotten Land** (testing): the shader split reads Kirby's `.cmp` files (a size, then
   zstd), and a 60 fps patch for 1.1.0's frame pacer (one 1/60 s period per frame instead of two; the game
