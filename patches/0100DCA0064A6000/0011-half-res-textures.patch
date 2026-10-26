@@ -33,7 +33,7 @@ index fdabd14..6599aec 100644
           f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
           f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
 diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
-index c8b64b6..fe18bbc 100644
+index 5144609..28315c0 100644
 --- a/dm/games/settings.tsv
 +++ b/dm/games/settings.tsv
 @@ -22,6 +22,7 @@ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
@@ -43,7 +43,7 @@ index c8b64b6..fe18bbc 100644
 +DM_TEX_HALF	toggle	-	DM_GAME_TEX_HALF	gfxapi:nvn	Performance	Half-res textures	Saves memory; textures look blurrier.
  DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
  DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
- DM_NVN_ENC_THREAD	toggle	-	1	gfxapi:nvn	Performance	Encode thread
+ DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
 index e807437..dbca490 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
@@ -183,15 +183,15 @@ index e807437..dbca490 100644
          if (s.sampleCount == d.sampleCount && s.pixelFormat == d.pixelFormat && s.width == d.width && s.height == d.height) {
              enc_b_copy_texture(blit(), s, sz0, sl, MTLOriginMake(0, 0, 0), MTLSizeMake(s.width, s.height, 1), d, dz0, dl, MTLOriginMake(0, 0, 0));
 diff --git a/dm/tools/tests/test_launcher_settings.py b/dm/tools/tests/test_launcher_settings.py
-index e2ce418..3d5d486 100644
+index e1ef5a4..997419a 100644
 --- a/dm/tools/tests/test_launcher_settings.py
 +++ b/dm/tools/tests/test_launcher_settings.py
 @@ -12,7 +12,7 @@ settings = importlib.util.module_from_spec(spec)
  spec.loader.exec_module(settings)
  
  BOTW, WONDER = '01007EF00011E000', '010015100B514000'
--PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
-+PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_TEX_HALF', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+-PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
++PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_TEX_HALF', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
  
  
  def build(gid, api):

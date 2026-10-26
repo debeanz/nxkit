@@ -82,6 +82,8 @@ General, every game:
 - **Movie events outside the decoder lock**: the host signalled a video decoder's events while holding its
   lock; a same-core wake handed the core to the thread waiting for that lock, and the game stopped (sound went
   on; found on Kirby's guide movies). The events are signalled after the lock is released.
+- **Encode thread off**: nxnative's Encode thread (Metal encoding on a thread of its own) is off by default and no
+  longer in the launcher; games ran worse with it on the iPhone. `DM_NVN_ENC_THREAD=1` in `env.txt` turns it on.
 
 Kirby and the Forgotten Land (`patches/01004D300C5AE000`, testing):
 
