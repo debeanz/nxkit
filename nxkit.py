@@ -82,10 +82,10 @@ def checkout(home, ref=None):
     ref = ref or NXNATIVE_REF
     run(['git', '-C', repo, 'reset', '-q', '--hard', 'origin/main' if ref == 'main' else ref])   # also drops chain_header's rewrite of dm/gfx/nvn/dmsh_chain.h from the last build
     commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-    for p in sorted((HERE / 'patches').glob('*.patch')):   # files a patch creates are untracked, so the reset leaves them: removed, or the patch would not apply again
+    for p in sorted((HERE / 'patches').rglob('*.patch')):   # files a patch creates (any game's) are untracked, so the reset leaves them: removed, or the patch would not apply again
         for m in re.finditer(r'^--- /dev/null\n\+\+\+ b/(\S+)', p.read_text(encoding='utf-8').replace('\r\n', '\n'), re.M):
             (repo / m.group(1)).unlink(missing_ok=True)
-    apply_patches(repo)   # the same patches as the Mac build: the PC steps (the shader split) need the Windows fixes
+    apply_patches(repo)   # the general patches, as on the Mac: the PC steps (the shader split) need the Windows fixes; the game's own come once prepare knows the game
     return repo, commit
 
 
@@ -190,6 +190,7 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
         g = gamemod.load(f'{app:016X}')
         B.say('[RED] provisional game profile: values guessed from the survey, the game may not boot')
     B.say(f'game profile: {g.id} ({g.get("name", "")}){" (provisional: " + str(g.dir) + ")" if provisional else ""}')
+    apply_patches(repo, g.id)   # the game's own patches (patches/<title ID>): its code patches and split fixes are needed from the rewrite on
     builds, need = g.builds(), g.words('shader_versions')
     have, derived = B.nsp_versions(fam, builds), False
     pkg_ver = package or (g.get('package') if provisional else max(have, key=B.vnum))
@@ -294,20 +295,26 @@ def zip_dir(d, out):
 
 
 # ---- Cloud (macOS): build the slim IPA from the kit ----
-def apply_patches(repo):
-    """nxkit's changes to nxnative (patches/*.patch, in name order), applied on the PC (checkout) and on the Mac (build) alike"""
-    for p in sorted((HERE / 'patches').glob('*.patch')):
+def patch_files(game=None):
+    """nxkit's changes to nxnative: the general ones (patches/*.patch) go into every game's build, a game's own (patches/<title ID>/*.patch) only into that game's; each in name order"""
+    ps = sorted((HERE / 'patches').glob('*.patch'))
+    return ps + (sorted((HERE / 'patches' / game).glob('*.patch')) if game else [])
+
+
+def apply_patches(repo, game=None):
+    """The general patches and, with game, that game's own, applied on the PC (checkout, prepare, rebuild) and on the Mac (build) alike"""
+    for p in patch_files(game):
         if subprocess.run(['git', '-C', repo, 'apply', '--reverse', '--check', p], capture_output=True).returncode == 0: continue   # already applied
         r = subprocess.run(['git', '-C', repo, 'apply', p], capture_output=True, text=True)
-        if r.returncode: raise KitError(f'{p.name} does not apply to this nxnative commit: {r.stderr.strip()[-300:]}')
-        say(f'applied {p.name}')
+        if r.returncode: raise KitError(f'{p.relative_to(HERE / "patches").as_posix()} does not apply to this nxnative commit: {r.stderr.strip()[-300:]}')
+        say(f'applied {p.relative_to(HERE / "patches").as_posix()}')
 
 
 def build(repo, kit_dir, out_ipa):
-    apply_patches(repo)
-    B, gamemod, pg, nacp = load_nxnative(repo)
     kit, out_ipa = Path(kit_dir).resolve(), Path(out_ipa).resolve()
     meta = json.loads((kit / 'meta.json').read_text())
+    apply_patches(repo, meta['game'])   # the general patches and this game's own only
+    B, gamemod, pg, nacp = load_nxnative(repo)
     work = kit / 'work'; logs = work / 'logs'; (work / 'tmp').mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PATH=os.pathsep.join(B.TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin')]))
     env.setdefault('USER', getpass.getuser()); env.setdefault('J', str(os.cpu_count() or 8))
@@ -483,6 +490,7 @@ def rebuild_cmd(a):
         if not d.is_dir(): raise KitError(f'{d} from the last build is missing: build with the NSPs (game)')
     repo, commit = checkout(home, a.nxnative_ref)
     say(f'nxnative {commit[:10]} (last build {info["nxnative_commit"][:10]}); code and shaders of the last build, game files from {old.name}')
+    apply_patches(repo, info['game'])
     B, gamemod, pg, nacp = load_nxnative(repo)
     if info['derived'] and (work / 'profile' / info['game']).is_dir():
         os.environ['DM_GAMES_DIR'] = games_dir(work / 'profile'); os.environ['DM_GAMES_FIRST'] = '1'

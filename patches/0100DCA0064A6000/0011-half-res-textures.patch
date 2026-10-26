@@ -12,7 +12,7 @@ index 2003f56..c77c39f 100644
  # ---- Frame rate ----
  # 60 fps (30 on the Switch): the frame limiter waits until 33.333 ms have passed since the frame started, a constant the host sets to 1000 / fps_target (hle_fpslock.c), and the game
 diff --git a/dm/games/game.py b/dm/games/game.py
-index dee74ac..a6aa452 100644
+index fdabd14..6599aec 100644
 --- a/dm/games/game.py
 +++ b/dm/games/game.py
 @@ -134,6 +134,8 @@ def header(g):
@@ -21,22 +21,22 @@ index dee74ac..a6aa452 100644
      if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
 +    thf = g.get('tex_half', 'off')   # nxkit: the launcher's Half-res textures default (nvn_mtl.m tex_half)
 +    if thf not in ('on', 'off'): sys.exit(f'{g.id}: tex_half must be on or off: {thf}')
-     nbl = g.get('no_blur', '')   # nxkit: <fragment key>:<uniform slot>:<offset>[,<offset>...]: the floats zeroed in that uniform buffer for that shader's draws while the launcher's No blur is on (nvn_mtl.m nb_override)
-     if nbl and not re.fullmatch(r'[0-9a-f]{16}:\d+:0x[0-9a-f]+(,0x[0-9a-f]+)*', nbl): sys.exit(f'{g.id}: no_blur must be <fragment key>:<uniform slot>:<offset>[,<offset>...]: {nbl}')
      api = g.get('device_api', '55.15')   # the NVN API major.minor version nvnDeviceGetInteger reports (hle_nvn.c)
-@@ -173,6 +175,7 @@ def header(g):
+     if not re.fullmatch(r'\d+\.\d+', api): sys.exit(f'{g.id}: device_api must be major.minor: {api}')
+     src = f'dm/games/{g.id}' if g.dir.parent == HERE else str(g.dir)
+@@ -170,6 +172,7 @@ def header(g):
+          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
           f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
           f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
-          f'#define DM_GAME_NO_BLUR {q(nbl)}',
 +         f'#define DM_GAME_TEX_HALF {int(thf == "on")}',
           f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
           f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
           f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
 diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
-index 8259f8a..c68320d 100644
+index c8b64b6..fe18bbc 100644
 --- a/dm/games/settings.tsv
 +++ b/dm/games/settings.tsv
-@@ -23,6 +23,7 @@ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
+@@ -22,6 +22,7 @@ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
  DM_RUMBLE	toggle	-	1	always	Controls	Game rumble
  DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength
  DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
@@ -45,7 +45,7 @@ index 8259f8a..c68320d 100644
  DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
  DM_NVN_ENC_THREAD	toggle	-	1	gfxapi:nvn	Performance	Encode thread
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index 04288f1..f0dc20b 100644
+index e807437..dbca490 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -1539,6 +1539,26 @@ static int pkg_edges_clean(NvPkg *pk, const tex_t *t) {   // the covered pages w
@@ -149,7 +149,7 @@ index 04288f1..f0dc20b 100644
          if (l0 >= base.mipmapLevelCount) { RED_ONCE(109, "texture view id %d starts at mip %lu beyond %lu levels", tid, (unsigned long)l0, (unsigned long)base.mipmapLevelCount); return nil; }
          // A level count past the texture's levels is cut to those it has, as deko3d's Tegra descriptor writer clips the maximum level (Echoes of Wisdom: levels 1 + 7 of a seven-level texture,
          // which Metal's validation refuses)
-@@ -8238,6 +8268,7 @@ static void copy_t2b(const p_copy_b2t *c) {
+@@ -8224,6 +8254,7 @@ static void copy_t2b(const p_copy_b2t *c) {
      if (!t) return;
      int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
      unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
@@ -157,7 +157,7 @@ index 04288f1..f0dc20b 100644
      size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
      size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
      int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
-@@ -8281,6 +8312,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -8267,6 +8298,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
      @autoreleasepool {
      id<MTLTexture> mt = tex_mtl(t);
      if (!mt) { memset(dst, 0, img * nz); return; }
@@ -165,7 +165,7 @@ index 04288f1..f0dc20b 100644
      mtl_finish_gpu_at(WS_READTEX);
      id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
      id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
-@@ -8297,6 +8329,7 @@ static void copy_b2t(const p_copy_b2t *c) {
+@@ -8283,6 +8315,7 @@ static void copy_b2t(const p_copy_b2t *c) {
      if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
      int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
      unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
@@ -173,7 +173,7 @@ index 04288f1..f0dc20b 100644
      size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
      size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
      int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
-@@ -8423,6 +8456,8 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -8409,6 +8442,8 @@ static void copy_t2t(const p_copy_t2t *c) {
      if (!s || !d) return;
      unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
      unsigned sz0 = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, dz0 = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;

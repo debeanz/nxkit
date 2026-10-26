@@ -63,9 +63,14 @@ code is not rewritten again, so changes to nxnative's code rewriter or a game's 
 
 ## nxkit's changes to nxnative
 
-The cloud build applies the patches in `patches/` to nxnative before compiling the app (they are made for
-the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nxnative's MetalFX upscaling and single-screen launcher):
+nxkit applies its patches to nxnative before building (they are made for the nxnative commit in `NXNATIVE_REF`,
+nxkit.py; currently 2db12f7, which has nxnative's MetalFX upscaling and single-screen launcher). **General**
+patches (`patches/*.patch`) go into every game's build; a **game's own** patches (`patches/<title ID>/*.patch`) go
+only into that game's build, so one game's fixes never run in another.
 
+General, every game:
+
+- **Windows paths** (PC): nxnative's PC-side scripts run on Windows.
 - **Display options** in the launcher: Resolution (Native, 1920x1080, 1600x900, 1280x720: the size the
   picture is scaled to on screen) and Screen Scaling (Fit 16:9, Stretch full screen, Stretch 1.943:1,
   Zoom full screen). Touches on the game's touch screen follow the picture.
@@ -74,32 +79,36 @@ the nxnative commit in `NXNATIVE_REF`, nxkit.py; currently 2db12f7, which has nx
 - **Memory recorder from env.txt** (iOS): `DM_MEMSTAT=memstat.tsv` in `Documents/env.txt` now starts
   nxnative's per-second memory breakdown (it used to start before env.txt was read); the file goes
   beside `log.txt`.
-- **Idle texture eviction** (testing; only in games whose profile has `evict_idle on`, so far Luigi's Mansion 3): GPU copies of compressed textures on
-  GPU-only pools that nothing used for about 7 seconds are dropped and rebuilt from game memory when
-  needed again, so games that never free their textures don't run the iPhone out of memory.
-  `DM_NVN_EVICT_IDLE=0` in `env.txt` turns it off (`=1800` turns it on in another game); the log line `idle texture eviction:` shows what it freed.
-- **Idle render targets dropped** (testing; with `evict_idle on`, as above): render targets nothing drew into or sampled for
-  64 submissions (about a quarter second) are dropped too; dynamic resolution left a full set of them behind at
-  every size it picked. `DM_NVN_EVICT_RT_IDLE=0` turns it off (`=64` turns it on in another game).
-- **Half-res textures** (launcher switch under Performance; on by default for Luigi's Mansion 3, profile key `tex_half`): ASTC
-  textures of 256x256 or more with mipmaps are made without their top level, so they take a quarter of the memory and look a
-  little blurrier. Textures the game draws into are never changed. `DM_TEX_HALF=0` / `1` in `env.txt` overrides the switch; the
-  log line `half-res textures:` shows how much it saved.
-- **Movie events outside the decoder lock** (Kirby's guide movies): the host signalled a video decoder's
-  events while holding its lock; a same-core wake handed the core to the thread waiting for that lock, and the
-  game stopped (sound went on). The events are signalled after the lock is released.
-- **No blur** (Link's Awakening): always on. For the game's depth-of-field / tilt-shift composite only, the
-  host hands the GPU a copy of its uniform buffer with the blend strength zeroed, so it outputs the sharp
-  frame; the game's own data is not touched. Profile key `no_blur`; `DM_NO_BLUR=0` in `env.txt` turns it off.
-- **Layer crop** (Link's Awakening, handheld): a game that crops its display layer (`vi::SetLayerCrop`) instead
-  of its NVN window is shown cropped; Link's Awakening draws handheld frames into 1280x720 of a 1920x1080
-  texture, which showed small in a corner.
-- **Keep 60 fps** (Link's Awakening, profile key `keep_60`): the game switches itself to 30 fps after a few
-  late frames, and the phone then lowers its clocks so it never gets back; its request is not followed.
-  `DM_KEEP_60=0` follows it again.
-- **Kirby and the Forgotten Land** (testing): the shader split reads Kirby's `.cmp` files (a size, then
-  zstd), and a 60 fps patch for 1.1.0's frame pacer (one 1/60 s period per frame instead of two; the game
-  steps by the measured time, so its speed stays right).
+- **Movie events outside the decoder lock**: the host signalled a video decoder's events while holding its
+  lock; a same-core wake handed the core to the thread waiting for that lock, and the game stopped (sound went
+  on; found on Kirby's guide movies). The events are signalled after the lock is released.
+
+Kirby and the Forgotten Land (`patches/01004D300C5AE000`, testing):
+
+- The shader split reads Kirby's `.cmp` files (a size, then zstd), and a 60 fps patch for 1.1.0's frame pacer
+  (one 1/60 s period per frame instead of two; the game steps by the measured time, so its speed stays right).
+
+The Legend of Zelda: Link's Awakening (`patches/01006BB00C6F0000`):
+
+- **No blur**, always on. For the game's depth-of-field / tilt-shift composite only, the host hands the GPU a
+  copy of its uniform buffer with the blend strength zeroed, so it outputs the sharp frame; the game's own data
+  is not touched. `DM_NO_BLUR=0` in `env.txt` turns it off.
+- **Handheld picture**: the game draws handheld frames into 1280x720 of a 1920x1080 texture and crops its display
+  layer (`vi::SetLayerCrop`) to that; the present follows that crop (it showed small in a corner).
+- **Keep 60 fps**: the game switches itself to 30 fps after a few late frames, and the phone then lowers its
+  clocks so it never gets back; its request is not followed. `DM_KEEP_60=0` follows it again.
+
+Luigi's Mansion 3 (`patches/0100DCA0064A6000`, testing, against running out of memory):
+
+- **Idle texture eviction**: GPU copies of compressed textures on GPU-only pools that nothing used for about
+  7 seconds are dropped and rebuilt from game memory when needed again. `DM_NVN_EVICT_IDLE=0` in `env.txt`
+  turns it off; the log line `idle texture eviction:` shows what it freed.
+- **Idle render targets dropped**: render targets nothing drew into or sampled for 64 submissions (about a
+  quarter second) are dropped too; dynamic resolution left a full set of them behind at every size it picked.
+  `DM_NVN_EVICT_RT_IDLE=0` turns it off.
+- **Half-res textures** (launcher switch under Performance, on by default): ASTC textures of 256x256 or more with
+  mipmaps are made without their top level, so they take a quarter of the memory and look a little blurrier.
+  Textures the game draws into are never changed. The log line `half-res textures:` shows how much it saved.
 
 Games nxnative has no profile for are built from a **provisional profile**, as nxnative's own script
 does: it surveys the game and guesses the profile (kept in `<NSP folder>/<title ID>_build/profile/`, reused

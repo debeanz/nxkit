@@ -1,5 +1,5 @@
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index 3c2f772..04288f1 100644
+index 03fb0d1..e807437 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -3455,11 +3455,21 @@ static void ev_hot_add(CFMutableSetRef hot, void *v) { if (v) CFSetAddValue(hot,
