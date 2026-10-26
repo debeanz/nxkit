@@ -1,5 +1,5 @@
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index f040d83..03fb0d1 100644
+index b568408..a93f3bb 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -699,6 +699,7 @@ void mtl_sub_begin(void) {
@@ -10,7 +10,7 @@ index f040d83..03fb0d1 100644
      if (!g_warm_started && prepare_on()) shmap_load();   // the first submission: the prepare step (warm_start), before anything of it is encoded
      warm_claim();
      if (g_cb) MDIE("submit re-entered");
-@@ -2075,7 +2076,9 @@ static int tex_cpu_written(uint64_t serial) {
+@@ -2083,7 +2084,9 @@ static int tex_cpu_written(uint64_t serial) {
      return r;
  }
  static id<MTLTexture> tex_mtl_(const tex_t *ct);
@@ -21,9 +21,9 @@ index f040d83..03fb0d1 100644
  // A sparse texture is bound from its first level whose pages, and those of every smaller level, are all mapped: a view of levels [r, n) samples as with a minimum LOD of r.
  // The translator drops TEX's LOD clamp and residency predicate, so Monster Hunter Rise's streamed textures were sampled at levels it had not mapped yet; those read 0, which ASTC
  // decodes as its error colour (magenta clothes on the title screen). Single-layer 2D textures only; the view follows each upload, as the mappings change only with one
-@@ -3373,7 +3376,8 @@ void mtl_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
+@@ -3381,7 +3384,8 @@ void mtl_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
  typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; int view_pkg;   // view_pkg: CPU-written (packaged); only those depend on guest writes (view_dirty)
-                  void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type;   // alt: compatible view used when the shader's declared type differs from view (tex_fit), alt_of = the view it was built from
+                  void *alt, *alt_of; uint64_t alt_rid, alt_sub; uint8_t alt_type;   // alt: compatible view used when the shader's declared type differs from view (tex_fit), alt_of = the view it was built from; alt_sub: the submission a plane-0 copy was last made in
                   void *ar, *ar_of; uint64_t ar_rid;                         // ar: the alpha-from-red view for the profile's alpha_from_red shaders (tex_alpha_red), ar_of = the view it was built from
 -                 void *im, *im_of; uint64_t im_rid; } treg_t;              // im: the view an image slot reads in the shader's pixel class (img_fit), im_of = the view it was built from
 +                 void *im, *im_of; uint64_t im_rid;
@@ -31,7 +31,7 @@ index f040d83..03fb0d1 100644
  static treg_t *g_treg; static int g_ntreg;
  // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
  // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
-@@ -3427,6 +3431,93 @@ static void vc_put(uint64_t ser, const void *pool, const vc_key *k, id<MTLTextur
+@@ -3435,6 +3439,93 @@ static void vc_put(uint64_t ser, const void *pool, const vc_key *k, id<MTLTextur
      s->k[i] = *k; s->view[i] = (void *)CFBridgingRetain(v); g_vc_new++;
  }
  void mtl_vc_drop(uint64_t ser) { os_unfair_lock_lock(&g_rmu); vc_set *s = nvn_hm_del(&g_vc, &ser); if (s) vc_set_free(s); os_unfair_lock_unlock(&g_rmu); }
@@ -125,7 +125,7 @@ index f040d83..03fb0d1 100644
  void mtl_vc_stats(unsigned *n, uint64_t *hit, uint64_t *made) { os_unfair_lock_lock(&g_rmu); *n = g_vc.n; *hit = g_vc_hit; *made = g_vc_new; os_unfair_lock_unlock(&g_rmu); }
  static void vc_drop_pool(const void *pool) {   // caller holds g_rmu
      for (uint32_t i = 0; i < g_vc.cap;) {   // a deletion shifts later entries back into slot i: look at it again
-@@ -3540,7 +3631,7 @@ void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
+@@ -3548,7 +3639,7 @@ void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
  static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
      if (g_tpool_n && tid >= g_tpool_n) { if (!g_stat_tex_oob++) MLOG("texture ID %d outside the pool (capacity %d) treated as an empty slot: reads 0", tid, g_tpool_n); return nil; }
      if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) { RED_ONCE(10, "texture ID %d not registered", tid); return nil; }
@@ -134,7 +134,7 @@ index f040d83..03fb0d1 100644
      uint64_t sg = g_ser_gen, dg = nvn_dirty_now();   // Take the generations first and then look up: if a change happens in between, the next time must take the slow path
      if (rp->view && rp->view_ser == sg && (!rp->view_pkg || rp->view_dirty == dg)) return (__bridge id<MTLTexture>)rp->view;
      id<MTLTexture> v = (__bridge id<MTLTexture>)rp->view;
-@@ -3622,7 +3713,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
+@@ -3630,7 +3721,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
  }
  // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
  static inline __attribute__((always_inline)) void *tex_fast(int tid) {
@@ -143,7 +143,7 @@ index f040d83..03fb0d1 100644
      return (__bridge void *)tex_by_id(tid);
  }
  // The texture type the shader declares differs from the one the descriptor gives: use a compatible view. Maxwell sample instructions carry their own dimension, and a non-array instruction reading a 2D array texture reads layer 0;
-@@ -3756,7 +3847,7 @@ static id<MTLTexture> img_fit(int tid, id<MTLTexture> t, int dpf, uint64_t *rid)
+@@ -3789,7 +3880,7 @@ static id<MTLTexture> img_fit(int tid, id<MTLTexture> t, int dpf, uint64_t *rid)
      *rid = r->im_rid; return v;
  }
  static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
@@ -152,7 +152,7 @@ index f040d83..03fb0d1 100644
      id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
  }
  static MTLSamplerAddressMode wrapm(int w) {
-@@ -8172,7 +8263,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -8205,7 +8296,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
  }
  static void copy_b2t(const p_copy_b2t *c) {
      if (c->tex) zskip_del(c->tex->serial);
@@ -161,7 +161,7 @@ index f040d83..03fb0d1 100644
      if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
      int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
      unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
-@@ -8297,7 +8388,7 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -8330,7 +8421,7 @@ static void copy_t2t(const p_copy_t2t *c) {
          int ss = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, ds = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
          if (zskip_has(c->src->serial, sl, ss)) zskip_add(c->dst->serial, dl, ds);
      }
@@ -170,7 +170,7 @@ index f040d83..03fb0d1 100644
      PD("T src=%llu dst=%llu %dx%dx%d→%dx%dx%d flags=%#x", c->src->serial, c->dst->serial, c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth, c->flags);
      if (!s || !d) return;
      unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
-@@ -8389,7 +8480,7 @@ static unsigned mtl_pf_chmask(MTLPixelFormat pf) {
+@@ -8422,7 +8513,7 @@ static unsigned mtl_pf_chmask(MTLPixelFormat pf) {
  static void clear_tex_tri(id<MTLTexture> t, unsigned lv, unsigned l0, const p_clear_tex *c);
  static void clear_tex(const p_clear_tex *c) {
      if (c->tex) zskip_del(c->tex->serial);

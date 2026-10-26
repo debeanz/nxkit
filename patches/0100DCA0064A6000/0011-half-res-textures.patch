@@ -45,7 +45,7 @@ index 5144609..28315c0 100644
  DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
  DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index e807437..dbca490 100644
+index f5fa323..6a1e2c1 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -1539,6 +1539,26 @@ static int pkg_edges_clean(NvPkg *pk, const tex_t *t) {   // the covered pages w
@@ -90,7 +90,7 @@ index e807437..dbca490 100644
      return d;
  }
  // In-place upgrade: when the original texture was not created with PixelFormatView (off by default, to keep Apple GPU lossless compression) but a different-format view is needed, create a new one with the original spec + PixelFormatView, copy over every slice × level, and replace the registration.
-@@ -1880,6 +1908,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+@@ -1888,6 +1916,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
                          ? reuse : [g_dev newTextureWithDescriptor:d];
      if (!mt) { RED_ONCE(2, "failed to create MTLTexture %ux%u format %#x target %d", t->d.width, t->d.height, t->d.format, t->d.target); return nil; }
      if (g_allocprof > 0) { static int n; if (n++ < 30 || n % 500 == 0) MLOG("new texture (%s) #%d ser=%llu %ux%ux%u format %#x target %d levels %u storage %p", __func__, n, (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.target, t->d.levels, (void *)t->mem); }
@@ -98,7 +98,7 @@ index e807437..dbca490 100644
      res_add(mt);   // Both first upload and re-upload register residency here (Metal 4 does not make resources resident automatically; a missed registration = GPU address page fault)
      int sparse = t->pool && nvn_sparse_pool(t->pool);
      if (stamp) {   // no stamp: a one-time upload of content the CPU will not change (tex_init_fill), with no write tracking
-@@ -1888,7 +1917,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+@@ -1896,7 +1925,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
      int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
      unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // a cube array's depth counts layer-faces (tex_desc)
      size_t total = 0;
@@ -107,7 +107,7 @@ index e807437..dbca490 100644
          uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
          total += (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
      }
-@@ -1902,13 +1931,13 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+@@ -1910,13 +1939,13 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
          size_t stg_off;
          id<MTLBuffer> stg = up_alloc(total ? total : 16, &stg_off);
          size_t off = 0; int enc_ok = g_up_ce != nil, nb0 = g_nup_blits;
@@ -123,7 +123,7 @@ index e807437..dbca490 100644
                  off += pitch * rows * z;
              }
          }
-@@ -1933,7 +1962,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+@@ -1941,7 +1970,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
      res_add(stg); [g_up_keep addObject:stg];
      size_t off = 0;
      int zb = zblock_on() && t->d.format >= 0x79 && t->d.format <= 0x94; if (zb) { g_zb_ser = t->serial; g_zb_n = (int)MIN(d.mipmapLevelCount, 16u); memset(g_zb, 0, sizeof g_zb); memset(g_zb_tot, 0, sizeof g_zb_tot); }
@@ -132,7 +132,7 @@ index e807437..dbca490 100644
          uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
          size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
          for (unsigned y = 0; y < layers; y++) {
-@@ -1941,7 +1970,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+@@ -1949,7 +1978,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
              if (zb && l < 16) { const uint64_t *q = (const uint64_t *)((const uint8_t *)stg.contents + off); size_t nb = pitch * rows * z / 16;
                  for (size_t i = 0; i < nb; i++) g_zb[l] += !(q[2 * i] | q[2 * i + 1]);
                  g_zb_tot[l] += (uint32_t)nb; }
@@ -141,7 +141,7 @@ index e807437..dbca490 100644
              off += pitch * rows * z;
          }
      }
-@@ -3699,6 +3728,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
+@@ -3707,6 +3736,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
              sg = g_ser_gen;
          }
          NSUInteger l0 = r.v.set_levels ? r.v.base_level : 0, nl = r.v.set_levels && r.v.nlevels ? r.v.nlevels : base.mipmapLevelCount - l0;
@@ -149,7 +149,7 @@ index e807437..dbca490 100644
          if (l0 >= base.mipmapLevelCount) { RED_ONCE(109, "texture view id %d starts at mip %lu beyond %lu levels", tid, (unsigned long)l0, (unsigned long)base.mipmapLevelCount); return nil; }
          // A level count past the texture's levels is cut to those it has, as deko3d's Tegra descriptor writer clips the maximum level (Echoes of Wisdom: levels 1 + 7 of a seven-level texture,
          // which Metal's validation refuses)
-@@ -8224,6 +8254,7 @@ static void copy_t2b(const p_copy_b2t *c) {
+@@ -8257,6 +8287,7 @@ static void copy_t2b(const p_copy_b2t *c) {
      if (!t) return;
      int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
      unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
@@ -157,7 +157,7 @@ index e807437..dbca490 100644
      size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
      size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
      int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
-@@ -8267,6 +8298,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -8300,6 +8331,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
      @autoreleasepool {
      id<MTLTexture> mt = tex_mtl(t);
      if (!mt) { memset(dst, 0, img * nz); return; }
@@ -165,7 +165,7 @@ index e807437..dbca490 100644
      mtl_finish_gpu_at(WS_READTEX);
      id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
      id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
-@@ -8283,6 +8315,7 @@ static void copy_b2t(const p_copy_b2t *c) {
+@@ -8316,6 +8348,7 @@ static void copy_b2t(const p_copy_b2t *c) {
      if (!t) { PD("C ser=%llu (no host texture)", c->tex->serial); return; }
      int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
      unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
@@ -173,7 +173,7 @@ index e807437..dbca490 100644
      size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
      size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
      int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
-@@ -8409,6 +8442,8 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -8442,6 +8475,8 @@ static void copy_t2t(const p_copy_t2t *c) {
      if (!s || !d) return;
      unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
      unsigned sz0 = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, dz0 = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
