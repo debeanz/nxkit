@@ -78,6 +78,7 @@ jobs:
           export DM_GAMES_DIR="$RUNNER_TEMP/kit/profile" DM_ROOT="$RUNNER_TEMP/run" DM_ROMFS="$RUNNER_TEMP/kit/romfs" DM_SAVE="$RUNNER_TEMP/run/save" DM_TEMP="$RUNNER_TEMP/run/temp"
           export DM_MSL_DIR="$RUNNER_TEMP/run/msl" DM_FONT_DIR="$RUNNER_TEMP/run/font" DM_NVN_SHMAP="$RUNNER_TEMP/kit/profile/$G/shader_map.tsv" DM_FSLOG="$RUNNER_TEMP/results/fs.log"
           export DM_NO_GPU=1   # the runner is a virtual Mac without Metal 4: the NVN layer runs without a GPU (nvn_mtl.m g_nogpu)
+          export DM_FS=1       # every open and every path not found in the host log (the file log has reads only): the files the next kit must add
           python - "$BOOT_SECS" <<'EOF'
           import os, subprocess, sys, time
           secs, R = int(sys.argv[1]), os.environ['RUNNER_TEMP']
