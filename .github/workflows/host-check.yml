@@ -1,0 +1,104 @@
+# Build check for Switch 2 work on nxnative (the NVN2 host side, the shader transcoder): runs on a push to the host-check branch, after the PC attached the change as an
+# encrypted patch against nxnative (release host-check-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits; deleted as soon as it is downloaded).
+# The same build checks as nxnative's own CI (.github/workflows/tests.yml): the Mac host for a profile, the host unit tests, the iOS host sources compiled for the iPhone SDK.
+# No game files are involved. The logs come back encrypted as the artifact "logs" (the log of the run shows only the steps' results).
+name: Host check
+run-name: host check ${{ github.sha }}
+
+on:
+  push:
+    branches: [host-check]
+
+permissions:
+  contents: write   # deletes the input's release
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NXNATIVE_REF: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
+  GAME: 010015100B514000   # Super Mario Bros. Wonder: the profile nxnative's CI builds the host for (any profile does: the checks are about code)
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: ${{ env.NXNATIVE_REF }}
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the tools
+        run: python -m pip install -q cryptography lz4 capstone
+
+      - name: Download the patch and delete its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/in"
+          gh release download host-check-kit --pattern '*.nxk' --dir "$RUNNER_TEMP/in"
+          gh release delete host-check-kit --yes --cleanup-tag
+
+      - name: Apply the patch
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing"; exit 1; fi
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP"/in/*.nxk "$RUNNER_TEMP/change.patch"
+          rm -rf "$RUNNER_TEMP/in"
+          git -C nxnative apply --whitespace=nowarn "$RUNNER_TEMP/change.patch"
+          git -C nxnative status --short | wc -l
+
+      - name: Mac host
+        run: |
+          mkdir -p logs
+          make -C nxnative/dm/host GAME=$GAME -j3 dmhost > logs/dmhost.log 2>&1 && echo "dmhost built" || { echo "::error::dmhost failed"; grep -E "error|warning: .*nvn|Error" logs/dmhost.log | head -40 > logs/dmhost-errors.txt; exit 1; }
+
+      - name: Host unit tests
+        if: success() || failure()
+        run: |
+          mkdir -p logs
+          set -o pipefail
+          make -C nxnative/dm/host/tests GAME=$GAME -j3 run > logs/host-tests.log 2>&1 && echo "host tests passed" || { echo "::error::host tests failed"; exit 1; }
+
+      - name: iOS host sources for the iPhone SDK
+        if: success() || failure()
+        run: |
+          mkdir -p logs
+          (cd nxnative && python3 dm/ios/tools/compile_check.py) > logs/ios-compile.log 2>&1 && echo "iOS sources compiled" || { echo "::error::iOS compile check failed"; exit 1; }
+
+      - name: Encrypt the logs
+        if: always()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p logs "$RUNNER_TEMP/out"
+          tar -czf "$RUNNER_TEMP/logs.tgz" logs
+          python nxkit/nxkit.py encrypt "$RUNNER_TEMP/logs.tgz" "$RUNNER_TEMP/out/logs.tgz.nxk"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: logs
+          path: ${{ runner.temp }}/out/logs.tgz.nxk
+          retention-days: 1
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/change.patch" "$RUNNER_TEMP/logs.tgz" nxnative
