@@ -1,0 +1,104 @@
+# nxnative's shader build (dm/gfx/tools/dmsh_build.py, through own_compilers.py as the NSP script runs it) on a game's shader package, for Switch 2 work on nxnative:
+# runs on a push to the shader-build branch, after the PC attached its input encrypted (release shader-build-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's
+# build kits; deleted as soon as it is downloaded): a patch against nxnative, the shader package (shader_split.py) and the game profile with its shader tables.
+# Mac and iOS libraries are built; the build's report comes back encrypted as the artifact "results" (the run's log shows only dmsh_build's summary counts).
+name: Shader build
+run-name: shader build ${{ github.sha }}
+
+on:
+  push:
+    branches: [shader-build]
+
+permissions:
+  contents: write   # deletes the input's release
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NXNATIVE_REF: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 300
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: ${{ env.NXNATIVE_REF }}
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      # .NET with DOTNET_ROOT set: the shader translator (dmsh_xlate_bin/dmsh_xlate) finds its runtime through it
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.402'
+
+      - name: Install the tools
+        run: |
+          brew install spirv-cross zstd
+          python -m pip install -q cryptography lz4 capstone fonttools
+          xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Download the input and delete its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/in"
+          gh release download shader-build-kit --pattern '*.nxk' --dir "$RUNNER_TEMP/in"
+          gh release delete shader-build-kit --yes --cleanup-tag
+
+      - name: Decrypt and apply the patch
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing"; exit 1; fi
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP"/in/*.nxk "$RUNNER_TEMP/in.tar"
+          rm -rf "$RUNNER_TEMP/in"; mkdir -p "$RUNNER_TEMP/kit"
+          tar -xf "$RUNNER_TEMP/in.tar" -C "$RUNNER_TEMP/kit"; rm "$RUNNER_TEMP/in.tar"
+          git -C nxnative apply --whitespace=nowarn "$RUNNER_TEMP/kit/change.patch"
+          chmod +x nxnative/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate
+          ls "$RUNNER_TEMP/kit"; ls "$RUNNER_TEMP/kit/pkg" | head
+
+      - name: Shader build (Mac and iOS libraries)
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          export DM_GAMES_DIR="$RUNNER_TEMP/kit/profile" DM_GAME="$(ls "$RUNNER_TEMP/kit/profile" | head -1)" IOSOUT="$RUNNER_TEMP/out/ios" J=6
+          python nxnative/dm/gfx/tools/own_compilers.py "$RUNNER_TEMP/kit/pkg" "$RUNNER_TEMP/out/mac" > "$RUNNER_TEMP/results/build.log" 2>&1; rc=$?
+          grep -E "^shaders |^note:|^library stamp" "$RUNNER_TEMP/results/build.log" | cut -c1-300 || true
+          echo "dmsh_build exit $rc"; exit $rc
+
+      - name: Encrypt the results
+        if: always()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results" "$RUNNER_TEMP/up"
+          for d in mac ios; do echo "$d $(find "$RUNNER_TEMP/out/$d" -path '*/b-*' -name '*_b.metallib' 2>/dev/null | wc -l) shader libraries"; done | tee "$RUNNER_TEMP/results/libraries.txt"
+          tar -czf "$RUNNER_TEMP/results.tgz" -C "$RUNNER_TEMP" results
+          python nxkit/nxkit.py encrypt "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/up/results.tgz.nxk"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: results
+          path: ${{ runner.temp }}/up/results.tgz.nxk
+          retention-days: 1
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/out" "$RUNNER_TEMP/results" "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/in" "$RUNNER_TEMP/in.tar" nxnative
