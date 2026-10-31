@@ -1,0 +1,117 @@
+# Boot test for Switch 2 work on nxnative: the game runs headless in the Mac host for a limited time, with a file log, and the logs come back. Runs on a push to the boot-test
+# branch, after the PC attached its input encrypted (release boot-test-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit;
+# deleted as soon as it is downloaded): a patch against nxnative, the game profile, the rewritten code modules and a subset of the RomFS. No shader libraries unless the kit has
+# a shader package. The host's log, the file log and any crash report come back encrypted as the artifact "results" (the run's log shows only counts).
+name: Boot test
+run-name: boot test ${{ github.sha }}
+
+on:
+  push:
+    branches: [boot-test]
+
+permissions:
+  contents: write   # deletes the input's release
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NXNATIVE_REF: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
+  BOOT_SECS: 300
+
+jobs:
+  boot:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: ${{ env.NXNATIVE_REF }}
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the tools
+        run: python -m pip install -q cryptography lz4 capstone fonttools
+
+      - name: Download the input and delete its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/in"
+          gh release download boot-test-kit --pattern 'boot-kit.nxk.*' --dir "$RUNNER_TEMP/in"
+          gh release delete boot-test-kit --yes --cleanup-tag
+
+      - name: Decrypt and apply the patch
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing"; exit 1; fi
+          cat $(ls "$RUNNER_TEMP"/in/boot-kit.nxk.* | sort) > "$RUNNER_TEMP/kit.nxk"; rm -rf "$RUNNER_TEMP/in"
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP/kit.nxk" "$RUNNER_TEMP/kit.tar"; rm "$RUNNER_TEMP/kit.nxk"
+          mkdir -p "$RUNNER_TEMP/kit"; tar -xf "$RUNNER_TEMP/kit.tar" -C "$RUNNER_TEMP/kit"; rm "$RUNNER_TEMP/kit.tar"
+          git -C nxnative apply --whitespace=nowarn "$RUNNER_TEMP/kit/change.patch"
+          echo "RomFS files: $(find "$RUNNER_TEMP/kit/romfs" -type f | wc -l)"; df -h "$RUNNER_TEMP" | tail -1
+
+      - name: Mac host and font
+        run: |
+          mkdir -p "$RUNNER_TEMP/results" "$RUNNER_TEMP/run/save" "$RUNNER_TEMP/run/temp" "$RUNNER_TEMP/run/msl" "$RUNNER_TEMP/run/font"
+          export DM_GAMES_DIR="$RUNNER_TEMP/kit/profile"; G="$(ls "$DM_GAMES_DIR" | head -1)"; echo "G=$G" >> "$GITHUB_ENV"
+          make -C nxnative/dm/host GAME=$G -j3 dmhost > "$RUNNER_TEMP/results/dmhost-build.log" 2>&1 || { echo "::error::host build failed"; exit 1; }
+          python nxnative/dm/tools/make_ext_font.py "$RUNNER_TEMP/run/font/nintendo_ext.ttf" > "$RUNNER_TEMP/results/font.log" 2>&1 || echo "font failed (the run goes on without it)"
+
+      - name: Boot the game
+        run: |
+          export DM_GAMES_DIR="$RUNNER_TEMP/kit/profile" DM_ROOT="$RUNNER_TEMP/run" DM_ROMFS="$RUNNER_TEMP/kit/romfs" DM_SAVE="$RUNNER_TEMP/run/save" DM_TEMP="$RUNNER_TEMP/run/temp"
+          export DM_MSL_DIR="$RUNNER_TEMP/run/msl" DM_FONT_DIR="$RUNNER_TEMP/run/font" DM_NVN_SHMAP="$RUNNER_TEMP/kit/profile/$G/shader_map.tsv" DM_FSLOG="$RUNNER_TEMP/results/fs.log"
+          python - "$BOOT_SECS" <<'EOF'
+          import os, subprocess, sys, time
+          secs, R = int(sys.argv[1]), os.environ['RUNNER_TEMP']
+          t0 = time.time()
+          with open(f'{R}/results/host.log', 'w') as f:
+              p = subprocess.Popen(['nxnative/dm/host/dmhost', f'{R}/kit/patched'], cwd=f'{R}/run', stdout=f, stderr=subprocess.STDOUT)
+              while p.poll() is None and time.time() - t0 < secs: time.sleep(1)
+              rc = p.poll()
+              if rc is None:
+                  p.terminate()
+                  try: p.wait(10)
+                  except subprocess.TimeoutExpired: p.kill(); p.wait()
+          text = open(f'{R}/results/host.log', errors='replace').read()
+          s = f'host {"exited with " + str(rc) if rc is not None else "still running, stopped"} after {time.time() - t0:.0f} s; log {text.count(chr(10))} lines, {text.count("[RED]")} red; nnMain reached: {">>> nnMain" in text}'
+          print(s); open(f'{R}/results/summary.txt', 'w').write(s + '\n')
+          EOF
+          ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i dmhost | head -3 | while read f; do mkdir -p "$RUNNER_TEMP/results/crash"; cp ~/Library/Logs/DiagnosticReports/"$f" "$RUNNER_TEMP/results/crash/"; done
+          echo "file log lines: $(wc -l < "$RUNNER_TEMP/results/fs.log" 2>/dev/null || echo 0)"; ls "$RUNNER_TEMP/results"
+
+      - name: Encrypt the results
+        if: always()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results" "$RUNNER_TEMP/up"
+          tar -czf "$RUNNER_TEMP/results.tgz" -C "$RUNNER_TEMP" results
+          python nxkit/nxkit.py encrypt "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/up/results.tgz.nxk"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: results
+          path: ${{ runner.temp }}/up/results.tgz.nxk
+          retention-days: 1
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/run" "$RUNNER_TEMP/results" "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/in" "$RUNNER_TEMP"/kit.* nxnative ~/Library/Logs/DiagnosticReports/*dmhost* 2>/dev/null; true
