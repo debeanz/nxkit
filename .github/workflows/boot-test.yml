@@ -82,7 +82,7 @@ jobs:
           secs, R = int(sys.argv[1]), os.environ['RUNNER_TEMP']
           t0 = time.time()
           with open(f'{R}/results/host.log', 'w') as f:
-              p = subprocess.Popen(['nxnative/dm/host/dmhost', f'{R}/kit/patched'], cwd=f'{R}/run', stdout=f, stderr=subprocess.STDOUT)
+              p = subprocess.Popen([os.path.abspath('nxnative/dm/host/dmhost'), f'{R}/kit/patched'], cwd=f'{R}/run', stdout=f, stderr=subprocess.STDOUT)   # absolute: a relative program path is looked up from cwd
               while p.poll() is None and time.time() - t0 < secs: time.sleep(1)
               rc = p.poll()
               if rc is None:
