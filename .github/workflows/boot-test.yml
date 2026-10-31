@@ -64,7 +64,7 @@ jobs:
           python nxkit/nxkit.py decrypt "$RUNNER_TEMP/kit.nxk" "$RUNNER_TEMP/kit.tar"; rm "$RUNNER_TEMP/kit.nxk"
           mkdir -p "$RUNNER_TEMP/kit"; tar -xf "$RUNNER_TEMP/kit.tar" -C "$RUNNER_TEMP/kit"; rm "$RUNNER_TEMP/kit.tar"
           git -C nxnative apply --whitespace=nowarn "$RUNNER_TEMP/kit/change.patch"
-          echo "RomFS files: $(find "$RUNNER_TEMP/kit/romfs" -type f | wc -l)"; df -h "$RUNNER_TEMP" | tail -1
+          mkdir -p "$RUNNER_TEMP/kit/romfs"; echo "RomFS files: $(find "$RUNNER_TEMP/kit/romfs" -type f | wc -l)"; df -h "$RUNNER_TEMP" | tail -1
 
       - name: Mac host and font
         run: |
@@ -93,7 +93,7 @@ jobs:
           s = f'host {"exited with " + str(rc) if rc is not None else "still running, stopped"} after {time.time() - t0:.0f} s; log {text.count(chr(10))} lines, {text.count("[RED]")} red; nnMain reached: {">>> nnMain" in text}'
           print(s); open(f'{R}/results/summary.txt', 'w').write(s + '\n')
           EOF
-          ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i dmhost | head -3 | while read f; do mkdir -p "$RUNNER_TEMP/results/crash"; cp ~/Library/Logs/DiagnosticReports/"$f" "$RUNNER_TEMP/results/crash/"; done
+          { ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i dmhost | head -3 || true; } | while read f; do mkdir -p "$RUNNER_TEMP/results/crash"; cp ~/Library/Logs/DiagnosticReports/"$f" "$RUNNER_TEMP/results/crash/"; done
           echo "file log lines: $(wc -l < "$RUNNER_TEMP/results/fs.log" 2>/dev/null || echo 0)"; ls "$RUNNER_TEMP/results"
 
       - name: Encrypt the results
