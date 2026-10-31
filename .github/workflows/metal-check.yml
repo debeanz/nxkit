@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: seedds/nxnative
-          ref: 2db12f7efd
+          ref: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
           path: nxnative
           persist-credentials: false
 
