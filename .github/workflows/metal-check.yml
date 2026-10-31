@@ -1,0 +1,91 @@
+# Metal check for Switch 2 shader work (see tools/metal_check.py): runs on a push to the metal-check branch, after the PC attached the encrypted SPIR-V
+# (release metal-check-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits). The release is deleted as soon as it is downloaded;
+# the results (and the MSL of shaders that did not build) come back encrypted as the artifact "results", kept for a day. The log shows only counts.
+name: Metal check
+run-name: metal check ${{ github.sha }}
+
+on:
+  push:
+    branches: [metal-check]
+
+permissions:
+  contents: write   # deletes the input's release
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative (the build's spirv-cross and Metal options)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: 2db12f7efd
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the tools
+        run: |
+          brew install spirv-cross
+          python -m pip install -q cryptography
+          xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          xcodebuild -version; spirv-cross --version || true; xcrun -sdk iphoneos metal --version | head -1
+
+      - name: Download the input and delete its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/in"
+          gh release download metal-check-kit --pattern '*.nxk' --dir "$RUNNER_TEMP/in"
+          gh release delete metal-check-kit --yes --cleanup-tag
+
+      - name: Decrypt
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing"; exit 1; fi
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP"/in/*.nxk "$RUNNER_TEMP/in.zip"
+          rm -rf "$RUNNER_TEMP/in"; mkdir -p "$RUNNER_TEMP/work"
+          unzip -q "$RUNNER_TEMP/in.zip" -d "$RUNNER_TEMP/work"; rm "$RUNNER_TEMP/in.zip"
+          ls "$RUNNER_TEMP/work/spv" | wc -l
+
+      - name: Compile to Metal
+        run: python nxkit/tools/metal_check.py "$RUNNER_TEMP/work/spv" nxnative "$RUNNER_TEMP/results"
+
+      - name: Encrypt the results
+        if: always()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          if [ -d "$RUNNER_TEMP/results" ]; then
+            tar -czf "$RUNNER_TEMP/results.tgz" -C "$RUNNER_TEMP" results
+            python nxkit/nxkit.py encrypt "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/out/results.tgz.nxk"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: results
+          path: ${{ runner.temp }}/out/results.tgz.nxk
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/work" "$RUNNER_TEMP/results" "$RUNNER_TEMP/results.tgz" "$RUNNER_TEMP/in" "$RUNNER_TEMP/in.zip"
