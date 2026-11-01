@@ -17,7 +17,7 @@ defaults:
     shell: bash
 
 env:
-  NXNATIVE_REF: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
+  NXNATIVE_REF: cd859c38a8f8890ddbb57a23d6f45e23ba9e6651   # upstream main with Donkey Kong Bananza's Switch 2 support; the Mario Kart World / Pokopia work ported onto it
   GAME: 010015100B514000   # Super Mario Bros. Wonder: the profile nxnative's CI builds the host for (any profile does: the checks are about code)
 
 jobs:
