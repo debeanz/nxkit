@@ -1,0 +1,163 @@
+# Pokémon Pokopia's shader build in shards (131,090 shaders, ~64 runner-hours in one job): runs on a push to the pokopia-shaders branch, after the PC attached its input encrypted to the
+# release pokopia-shader-kit (AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits): common.nxk (a patch against nxnative, the game profile with its shader tables) and one
+# shard-NN.nxk per job (keys.txt, and the shader package with only that shard's records whole: pokopia-work\tools\shader_shards.py make). Each job builds its keys with dmsh_build.py
+# (through own_compilers.py, Mac and iOS libraries), stamps both library folders as a full build does and makes its part of c1_full.tsv / cb_extent.tsv from its Mac outputs; its iOS
+# libraries and tables come back encrypted as the artifact shard-NN (shader_shards.py merge joins them). The release is deleted when every job has finished.
+name: Pokopia shaders
+run-name: pokopia shaders ${{ github.sha }}
+
+on:
+  push:
+    branches: [pokopia-shaders]
+
+permissions:
+  contents: write   # deletes the input's release
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NXNATIVE_REF: 2db12f7efdf2acf50026ec10f515193d67f2a3b6
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          s=$(gh release view pokopia-shader-kit --json assets --jq '[.assets[].name | select(test("^shard-[0-9]+[.]nxk$")) | ltrimstr("shard-") | rtrimstr(".nxk")]')
+          echo "shards: $s"; [ "$s" != "[]" ] || { echo "::error::no shard-NN.nxk in the release pokopia-shader-kit"; exit 1; }
+          echo "shards=$s" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    runs-on: macos-26
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - name: Get nxkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: nxkit
+          persist-credentials: false
+
+      - name: Get nxnative
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: seedds/nxnative
+          ref: ${{ env.NXNATIVE_REF }}
+          path: nxnative
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      # .NET with DOTNET_ROOT set: the shader translator (dmsh_xlate_bin/dmsh_xlate) finds its runtime through it
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.402'
+
+      - name: Install the tools
+        run: |
+          brew install spirv-cross
+          python -m pip install -q cryptography lz4 capstone
+          xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          df -h "$RUNNER_TEMP" | tail -1
+
+      - name: Download the input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/in"
+          gh release download pokopia-shader-kit --pattern common.nxk --pattern "shard-${{ matrix.shard }}.nxk" --dir "$RUNNER_TEMP/in"
+
+      - name: Decrypt, unpack and apply the patch
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          if [ -z "$KIT_PASSWORD" ]; then echo "::error::The KIT_PASSWORD secret is missing"; exit 1; fi
+          K="$RUNNER_TEMP/kit"; mkdir -p "$K"
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP/in/common.nxk" "$RUNNER_TEMP/common.tar.xz"
+          python nxkit/nxkit.py decrypt "$RUNNER_TEMP/in/shard-${{ matrix.shard }}.nxk" "$RUNNER_TEMP/shard.tar"
+          rm -rf "$RUNNER_TEMP/in"
+          python - "$RUNNER_TEMP/common.tar.xz" "$RUNNER_TEMP/shard.tar" "$K" <<'EOF'
+          import lzma, os, shutil, sys, tarfile
+          for t in sys.argv[1:3]:
+              with tarfile.open(t) as a: a.extractall(sys.argv[3], filter='data')
+              os.remove(t)
+          pkg = os.path.join(sys.argv[3], 'pkg')
+          for n in sorted(os.listdir(pkg)):
+              if n.endswith('.xz'):
+                  with lzma.open(os.path.join(pkg, n)) as i, open(os.path.join(pkg, n[:-3]), 'wb') as o: shutil.copyfileobj(i, o, 8 << 20)
+                  os.remove(os.path.join(pkg, n))
+          EOF
+          git -C nxnative apply --whitespace=nowarn "$K/change.patch"
+          chmod +x nxnative/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate
+          echo "keys: $(wc -l < "$K/keys.txt"); package: $(du -sh "$K/pkg" | cut -f1)"
+
+      - name: Shader build of this shard (Mac and iOS libraries)
+        run: |
+          K="$RUNNER_TEMP/kit"; mkdir -p "$RUNNER_TEMP/results/tables" "$RUNNER_TEMP/logs"
+          export DM_GAMES_DIR="$K/profile" DM_GAME="$(ls "$K/profile" | head -1)" IOSOUT="$RUNNER_TEMP/out/ios" J=6 DMSH_CAS="$RUNNER_TEMP/cas"
+          python nxnative/dm/gfx/tools/own_compilers.py "$K/pkg" "$RUNNER_TEMP/out/mac" $(cat "$K/keys.txt") > "$RUNNER_TEMP/logs/build.log" 2>&1; rc=$?
+          grep -E "^shaders |^note:|^shader cache|^\[RED\]" "$RUNNER_TEMP/logs/build.log" | cut -c1-300 || true
+          echo "dmsh_build exit $rc"; [ $rc = 0 ] || exit $rc
+          # as a full build ends: both library folders stamped with the profile's inputs, then this shard's part of the c1 guard and uniform read extent tables from its Mac outputs
+          python - <<'EOF'
+          import os, sys
+          sys.path.insert(0, 'nxnative/dm/gfx/tools'); import dmsh_chain
+          g = dmsh_chain.load_game(); inputs = dmsh_chain.inputs(g); v = 'b-' + dmsh_chain.version(); t = os.environ['RUNNER_TEMP']
+          for d in ('mac', 'ios'): dmsh_chain.write_stamp(os.path.join(t, 'out', d, v), g.id, inputs)
+          print(f'stamp: game {g.id}, inputs {inputs}, library {v}')
+          EOF
+          V=$(ls "$RUNNER_TEMP/out/mac")
+          for tool in c1_guard:c1_full cb_extent:cb_extent; do
+            python "nxnative/dm/gfx/tools/${tool%%:*}.py" "$RUNNER_TEMP/out/mac/$V" "$RUNNER_TEMP/results/tables/${tool##*:}.tsv" | tail -1
+          done
+          echo "iOS libraries: $(find "$RUNNER_TEMP/out/ios/$V" -name '*.metallib' | wc -l), $(du -sh "$RUNNER_TEMP/out/ios/$V" | cut -f1)"
+
+      - name: Encrypt the results
+        if: always()
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results" "$RUNNER_TEMP/up" "$RUNNER_TEMP/out/ios"
+          cp "$RUNNER_TEMP/logs/build.log" "$RUNNER_TEMP/results/" 2>/dev/null || true
+          tar -czf "$RUNNER_TEMP/shard.tgz" -C "$RUNNER_TEMP/out" ios -C "$RUNNER_TEMP/results" .
+          python nxkit/nxkit.py encrypt "$RUNNER_TEMP/shard.tgz" "$RUNNER_TEMP/up/shard-${{ matrix.shard }}.nxk"
+          ls -la "$RUNNER_TEMP/up"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/up/shard-${{ matrix.shard }}.nxk
+          retention-days: 3
+          compression-level: 0
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/out" "$RUNNER_TEMP/results" "$RUNNER_TEMP/logs" "$RUNNER_TEMP/cas" "$RUNNER_TEMP/up" "$RUNNER_TEMP"/*.tgz "$RUNNER_TEMP"/*.tar* nxnative
+
+  cleanup:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the input's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release delete pokopia-shader-kit --yes --cleanup-tag || true
