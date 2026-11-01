@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 4   # of the account's 5 Mac runners: one stays free for the Mario Kart World IPA builds, which would otherwise queue behind every shard
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
