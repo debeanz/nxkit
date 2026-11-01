@@ -310,6 +310,34 @@ def apply_patches(repo, game=None):
         say(f'applied {p.relative_to(HERE / "patches").as_posix()}')
 
 
+def prebuilt_shaders(py, repo, kit, g, env, B):
+    """The iOS shader libraries of an earlier build of the same shaders, when the kit carries them (kit/shader/ios/b-<chain>/ with its stamp, and kit/shader/tables/ the c1_full.tsv and
+    cb_extent.tsv made with it): taken instead of a shader build when they are this checkout's chain version and their stamp names this game and its profile's current inputs, the
+    check build_ipa.sh makes of any libraries (a build would make the same ones: Mario Kart World's 11,561 shaders take ~60 min on a runner). The tables go into the profile, where
+    a build's chain_tables puts them. Returns the folder for MSL_IOS, or None (the reason said) and the shaders are built"""
+    pre = kit / 'shader/ios'
+    if not pre.is_dir(): return None
+    chain = B.chain_of(repo); libs = pre / f'b-{chain}'
+    r = subprocess.run([py, repo / 'dm/gfx/tools/dmsh_chain.py', '--inputs'], env=env, capture_output=True, text=True)
+    inputs, want = r.stdout.strip(), B.lib_head(libs)
+    heads = {}
+    for name, _, _ in B.CHAIN_TABLES:
+        try: heads[name] = (kit / 'shader/tables' / name).read_text(errors='replace').partition('\n')[0]
+        except OSError: heads[name] = ''
+    if r.returncode or not inputs: why = 'dmsh_chain.py --inputs failed'
+    elif not next(libs.glob('*_b.metallib'), None): why = f'they are {", ".join(sorted(p.name for p in pre.glob("b-*"))) or "no library folder"}, this checkout\'s chain is b-{chain}'
+    elif not want: why = 'their folder has no stamp (inputs.tsv)'
+    elif want != f'# chain b-{chain} inputs {inputs}' or f'game\t{g.id}' not in (libs / 'inputs.tsv').read_text().splitlines():
+        why = f'their stamp names inputs {want.split()[-1]} or another game, this profile\'s are {inputs}'
+    else: why = next((f'{n} {"names " + " ".join(h.split()[2:5]) if h else "is missing"}' for n, h in heads.items() if not h.startswith(want + ' ')), None)
+    if why:
+        say(f'prebuilt shader libraries not taken: {why}; building the shaders'); return None
+    for name in heads: shutil.copyfile(kit / 'shader/tables' / name, g.table(name))
+    n = sum(1 for _ in libs.glob('*_b.metallib'))
+    say(f'shaders: {n:,} prebuilt iOS libraries taken (b-{chain}, inputs {inputs}): no shader build')
+    return pre
+
+
 def build(repo, kit_dir, out_ipa):
     kit, out_ipa = Path(kit_dir).resolve(), Path(out_ipa).resolve()
     meta = json.loads((kit / 'meta.json').read_text())
@@ -332,8 +360,10 @@ def build(repo, kit_dir, out_ipa):
         if meta['gfx'] == 'vulkan':
             ios = B.build_vk_shaders(py, repo, [kit / 'game/RomFS'], sh, env, logs, g, reuse=False)
         else:
-            shutil.copytree(kit / 'shader/pkg', sh / 'pkg')
-            ios = B.build_shaders(py, repo, sh, xlate, env, logs, g, None, False)
+            ios = prebuilt_shaders(py, repo, kit, g, env, B)
+            if not ios:
+                shutil.copytree(kit / 'shader/pkg', sh / 'pkg')
+                ios = B.build_shaders(py, repo, sh, xlate, env, logs, g, None, False)
         ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(kit / 'patched'), ROMFS=str(kit / 'game/RomFS'), MSL_IOS=str(ios), GFXAPI=meta['gfx'], FONT_PY=py,
                        DM_DISPLAY_NAME=meta['app_name'], DM_BUNDLE_ID=meta['bundle_id'], AOC='', DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID='0000000000',
                        DM_LANG=meta['language'], DM_SHOW_FPS='1' if meta['show_fps'] else '0')
