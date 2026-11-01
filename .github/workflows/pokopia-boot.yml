@@ -1,14 +1,15 @@
+# Pokopia boot test (a copy of boot-test.yml with its own kit and RomFS store releases, pokopia-boot-kit / pokopia-romfs, so Mario Kart World's store is not downloaded):
 # Boot test for Switch 2 work on nxnative: the game runs headless in the Mac host for a limited time, with a file log, and the logs come back. Runs on a push to the boot-test
-# branch, after the PC attached its input encrypted (release boot-test-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit;
+# branch, after the PC attached its input encrypted (release pokopia-boot-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit;
 # deleted as soon as it is downloaded): a patch against nxnative, the game profile, the rewritten code modules and a subset of the RomFS. The RomFS files can also come from the
-# store release boot-test-romfs (encrypted the same way; kept between rounds, so each round uploads only files not sent before; deleted when boot testing ends). No shader
+# store release pokopia-romfs (encrypted the same way; kept between rounds, so each round uploads only files not sent before; deleted when boot testing ends). No shader
 # libraries. The host's log, the file log and any crash report come back encrypted as the artifact "results" (the run's log shows only counts).
 name: Boot test
 run-name: boot test ${{ github.sha }}
 
 on:
   push:
-    branches: [boot-test]
+    branches: [pokopia-boot]
 
 permissions:
   contents: write   # deletes the input's release
@@ -53,8 +54,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p "$RUNNER_TEMP/in"
-          gh release download boot-test-kit --pattern 'boot-kit.nxk.*' --dir "$RUNNER_TEMP/in"
-          gh release delete boot-test-kit --yes --cleanup-tag
+          gh release download pokopia-boot-kit --pattern 'boot-kit.nxk.*' --dir "$RUNNER_TEMP/in"
+          gh release delete pokopia-boot-kit --yes --cleanup-tag
 
       - name: Decrypt and apply the patch
         env:
@@ -66,7 +67,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/kit"; tar -xf "$RUNNER_TEMP/kit.tar" -C "$RUNNER_TEMP/kit"; rm "$RUNNER_TEMP/kit.tar"
           git -C nxnative apply --whitespace=nowarn "$RUNNER_TEMP/kit/change.patch"
 
-      # The RomFS store (release boot-test-romfs, kept between rounds with the owner's OK, deleted when boot testing ends): each part holds the files first needed in one round,
+      # The RomFS store (release pokopia-romfs, kept between rounds with the owner's OK, deleted when boot testing ends): each part holds the files first needed in one round,
       # fetched and unpacked one at a time so the disk holds one encrypted part at most beside the RomFS
       - name: RomFS store
         env:
@@ -75,10 +76,10 @@ jobs:
           KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
         run: |
           mkdir -p "$RUNNER_TEMP/kit/romfs"
-          if gh release view boot-test-romfs >/dev/null 2>&1; then
-            for p in $(gh release view boot-test-romfs --json assets --jq '.assets[].name' | sed 's/\.[0-9][0-9]$//' | sort -u); do
+          if gh release view pokopia-romfs >/dev/null 2>&1; then
+            for p in $(gh release view pokopia-romfs --json assets --jq '.assets[].name' | sed 's/\.[0-9][0-9]$//' | sort -u); do
               rm -rf "$RUNNER_TEMP/st"; mkdir -p "$RUNNER_TEMP/st"
-              gh release download boot-test-romfs --pattern "$p.*" --dir "$RUNNER_TEMP/st"
+              gh release download pokopia-romfs --pattern "$p.*" --dir "$RUNNER_TEMP/st"
               cat $(ls "$RUNNER_TEMP"/st/$p.* | sort) > "$RUNNER_TEMP/st.nxk"; rm -rf "$RUNNER_TEMP/st"
               python nxkit/nxkit.py decrypt "$RUNNER_TEMP/st.nxk" "$RUNNER_TEMP/st.tar"; rm "$RUNNER_TEMP/st.nxk"
               tar -xf "$RUNNER_TEMP/st.tar" -C "$RUNNER_TEMP/kit/romfs"; rm "$RUNNER_TEMP/st.tar"
