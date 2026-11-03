@@ -128,6 +128,20 @@ Luigi's Mansion 3 (`patches/0100DCA0064A6000`, testing, against running out of m
   mipmaps are made without their top level, so they take a quarter of the memory and look a little blurrier.
   Textures the game draws into are never changed. The log line `half-res textures:` shows how much it saved.
 
+Super Mario Maker 2 (`patches/01009B90006DC000`, testing; nxnative has no profile for it, so it builds from a provisional one):
+
+- From [nxnative issue #865](https://github.com/seedds/nxnative/issues/865) (a Mac bring-up of 3.0.3, v458752):
+  - **Nested zstd**: the shader split opens zstd members inside SARC packs (the model packs are SARC → zstd → SARC → bfsha),
+    with the frame's zstd dictionary when it names one.
+  - **Font replacement glyph**: the generated extension font gets U+E06B (a squared question mark), which the game preloads as
+    its fallback glyph; without it the game crashes at startup.
+  - **Profile keys** (`patches/01009B90006DC000/profile.tsv`, merged into the provisional `game.tsv`): `render_cond on` (black
+    picture with sound without it) and `shader_key_skip 0x7d0+0x18` (runtime shaders whose controls differ only in GLSLC's compile
+    information). `shader_key_skip` is backported from a newer nxnative (d8bc9210).
+- Still open upstream: an intermittent crash around `nvnCommandBufferEndRecording`, seen on the Mac before the shader set was complete.
+
+A game's `patches/<title ID>/profile.tsv` (key, tab, value) sets those keys in a provisional or derived profile's `game.tsv`.
+
 Games nxnative has no profile for are built from a **provisional profile**, as nxnative's own script
 does: it surveys the game and guesses the profile (kept in `<NSP folder>/<title ID>_build/profile/`, reused
 and editable). The heap check that boots the game on a Mac is skipped, so such a game may not boot at first.

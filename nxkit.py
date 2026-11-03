@@ -186,6 +186,7 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
             facts = B.survey(nsp_dir, app, fam, keys, repo, py, env)
             facts['survey'] = str(nsp_dir / f'{app:016X}_survey' / 'survey.md')
             B.write_profile(pdir / f'{app:016X}', app, facts)
+        profile_keys(pdir / f'{app:016X}' / 'game.tsv', f'{app:016X}')
         os.environ['DM_GAMES_DIR'] = env['DM_GAMES_DIR'] = games_dir(pdir)
         g = gamemod.load(f'{app:016X}')
         B.say('[RED] provisional game profile: values guessed from the survey, the game may not boot')
@@ -223,6 +224,7 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
     if derived and not provisional:
         pdir = nsp_dir / f'{app:016X}_build' / 'profile'
         disp = B.derive_profile(g, pdir / g.id, pkg_ver, dirs[pkg_ver], g.words('modules'), app)
+        profile_keys(pdir / g.id / 'game.tsv', g.id)
         os.environ['DM_GAMES_DIR'] = env['DM_GAMES_DIR'] = games_dir(pdir)
         os.environ['DM_GAMES_FIRST'] = env['DM_GAMES_FIRST'] = '1'
         g = gamemod.load(g.id)
@@ -285,6 +287,27 @@ def prepare(repo, commit, nsp_dir, keys, kit_zip, package=None, app_name=None, l
     (work / 'nxkit.json').write_text(json.dumps(info, indent=1))
     B.PROG.close()
     return info
+
+
+def profile_keys(game_tsv, game):
+    """patches/<title ID>/profile.tsv: profile keys nxkit sets in a provisional or derived game.tsv (Super Mario Maker 2, which nxnative has no profile for: render_cond, shader_key_skip).
+    Each key replaces the line that has it, or is added at the end; the file's other lines (a hand edit included) stay"""
+    src = HERE / 'patches' / game / 'profile.tsv'
+    if not src.is_file(): return
+    want = {}
+    for line in src.read_text(encoding='utf-8').splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            k, v = line.split('\t', 1); want[k] = v
+    T, out, done = '\t', [], set()
+    for line in game_tsv.read_text(encoding='utf-8').splitlines():
+        k = line.split(T, 1)[0]
+        if k in want:
+            if k not in done: out.append(f'{k}{T}{want[k]}'); done.add(k)
+            continue
+        out.append(line)
+    if want.keys() - done: out += ['', f'# ---- nxkit (patches/{game}/profile.tsv) ----'] + [f'{k}{T}{want[k]}' for k in want if k not in done]
+    game_tsv.write_text('\n'.join(out) + '\n', encoding='utf-8')
+    say(f'profile keys from patches/{game}/profile.tsv: {", ".join(f"{k} {v}" for k, v in want.items())}')
 
 
 def zip_dir(d, out):

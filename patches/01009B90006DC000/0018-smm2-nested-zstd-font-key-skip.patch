@@ -1,0 +1,120 @@
+diff --git a/dm/games/game.py b/dm/games/game.py
+index fdabd141..eb21bf0e 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -115,6 +115,11 @@ def header(g):
+     if any(not re.fullmatch(r'[0-9a-f]{8,16}', k) for k in fbs): sys.exit(f'{g.id}: feedback_snap takes fragment shader keys (8-16 lowercase hex digits): {fbs}')
+     afr = g.words('alpha_from_red', '')   # fragment shader key prefixes that read single-channel textures mapped (R, 0, 0, 1) with alpha = red (nvn_mtl.m tex_alpha_red); none by default
+     if any(not re.fullmatch(r'[0-9a-f]{8,16}', k) for k in afr): sys.exit(f'{g.id}: alpha_from_red takes fragment shader keys (8-16 lowercase hex digits): {afr}')
++    sks = g.get('shader_key_skip', '')   # control-section bytes the shader keys hash as zeros, <offset>+<length> (hle_nvn.c keys_hash, shader_split.py key_ctl; backported from nxnative d8bc9210 by nxkit for Super Mario Maker 2: 0x7d0+0x18)
++    m = re.fullmatch(r'(0x[0-9a-fA-F]+|\d+)\+(0x[0-9a-fA-F]+|\d+)', sks) if sks else None
++    if sks and (not m or not 0x30 <= int(m[1], 0) or not 0 < int(m[2], 0) or int(m[1], 0) + int(m[2], 0) > 0x880 or (int(m[1], 0) < 0x760 and int(m[1], 0) + int(m[2], 0) > 0x700)):   # not over +0x700..+0x75f, the code area and compute fields the tools read
++        sys.exit(f'{g.id}: shader_key_skip takes <offset>+<length> within the first 0x880 bytes of the control section, past its header (+0x30) and clear of +0x700..+0x75f: {sks}')
++    sko, skl = (int(m[1], 0), int(m[2], 0)) if m else (0, 0)
+     rcd = g.get('render_cond', 'off')   # NVN conditional rendering evaluated at replay, timestamp reports with counter 0 (nvn_mtl.m OP_RENDER_COND): on / off
+     if rcd not in ('on', 'off'): sys.exit(f'{g.id}: render_cond must be on or off: {rcd}')
+     tfu = g.get('tex_flush_upload', 'off')   # textures written by the CPU into a pool and published with nvnMemoryPoolFlushMappedRange are uploaded like packaged ones (hle_nvn.c): on / off
+@@ -169,6 +174,7 @@ def header(g):
+          f'#define DM_GAME_FEEDBACK_SNAP {q(" ".join(fbs))}',
+          f'#define DM_GAME_ALPHA_FROM_RED {q(" ".join(afr))}',
+          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
++         f'#define DM_GAME_SHADER_KEY_SKIP_OFF {sko:#x}', f'#define DM_GAME_SHADER_KEY_SKIP_LEN {skl:#x}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index dc568317..7ceee720 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -591,7 +591,12 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
+     uint32_t nctl = 0x880, own; memcpy(&own, (const uint8_t *)sd->control + 0x20, 4);
+     if (own >= 0x760 && own < 0x880) nctl = own;
+     uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX hc; CC_SHA256_Init(&hc);
+-    CC_SHA256_Update(&hc, sd->control, nctl);
++    // Profile key shader_key_skip: bytes of the control section hashed as zeros (shader_split.py key_ctl), for an engine that shares one control section among shaders whose
++    // sections differ only in GLSLC's compile information (Super Mario Maker 2: +0x7d0..+0x7e7)
++    if (DM_GAME_SHADER_KEY_SKIP_LEN && DM_GAME_SHADER_KEY_SKIP_OFF + DM_GAME_SHADER_KEY_SKIP_LEN <= nctl) {
++        uint8_t ctl[0x880]; memcpy(ctl, sd->control, nctl); memset(ctl + DM_GAME_SHADER_KEY_SKIP_OFF, 0, DM_GAME_SHADER_KEY_SKIP_LEN);
++        CC_SHA256_Update(&hc, ctl, nctl);
++    } else CC_SHA256_Update(&hc, sd->control, nctl);
+     if (code) CC_SHA256_Update(&hc, (const void *)(uintptr_t)sd->data, ncode);
+     CC_SHA256_Final(md, &hc); memcpy(out, md, 8);
+     return 1;
+diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
+index 318ad651..bd8869f1 100644
+--- a/dm/gfx/tools/shader_split.py
++++ b/dm/gfx/tools/shader_split.py
+@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak
+ GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
+ GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
++KEY_SKIP = tuple(int(x, 0) for x in GAME.get('shader_key_skip', '0+0').split('+'))   # control bytes the keys hash as zeros (key_ctl); dm/games/game.py checks the form
+ # The sources are what the game files hold, with no profile switch: GLSLC outputs in main (glslc_shaders), the outputs the game compiles at run time when a capture is there (DM_GLSLC_CAPTURE,
+ # hle_glslc.c), the shader code archives of Unreal paks once decoded on the Mac (uepak.py, DM_OODLE_JOB, hle_oodle.c); the NSP script decides from the files which of the last two to make
+ 
+@@ -80,8 +81,13 @@ def ctl_len(ctl):
+     n = struct.unpack_from('<I', ctl, 0x20)[0]
+     return n if 0x760 <= n < 0x880 else 0x880
+ 
++def key_ctl(ctl):
++    """The control bytes in the key: ctl_len of them, with the profile's shader_key_skip range as zeros (the host's keys_hash does the same)"""
++    c = ctl[:ctl_len(ctl)]
++    return c[:KEY_SKIP[0]] + bytes(KEY_SKIP[1]) + c[KEY_SKIP[0] + KEY_SKIP[1]:] if KEY_SKIP[1] and KEY_SKIP[0] + KEY_SKIP[1] <= len(c) else c
++
+ def skey(ctl, code):
+-    return hashlib.sha256(ctl[:ctl_len(ctl)] + code).hexdigest()[:16]
++    return hashlib.sha256(key_ctl(ctl) + code).hexdigest()[:16]
+ 
+ def same_shader(a, b):
+     """Two copies of one key hold the same shader: the code areas are equal, and so are the control sections up to their own length (control +0x20). Pokémon Legends: Z-A's UI layout archives
+@@ -89,6 +95,8 @@ def same_shader(a, b):
+     (ca, ka), (cb, kb) = a, b
+     n = struct.unpack_from('<I', ca, 0x20)[0] if len(ca) >= 0x24 else len(ca)
+     n = n if 0x760 <= n <= min(len(ca), len(cb)) else max(len(ca), len(cb))
++    o, ln = KEY_SKIP
++    if ln and o + ln <= n: ca, cb = ca[:o] + ca[o + ln:n], cb[:o] + cb[o + ln:n]; n = n - ln   # shader_key_skip: the bytes the key leaves out may differ
+     return ka == kb and ca[:n] == cb[:n]
+ 
+ def check(where, st, ctl, code):
+@@ -1574,8 +1582,20 @@ def unity_shaders(d, label, out, trees):
+                 out.extend((where, st, ctl, cd) for st, ctl, cd in unity_program(code, where, stages.get(k)))
+         out.extend(unity_compute(x, f'{label}{":" + node if node else ""}', trees))
+ 
++def nested_zstd(d, label):
++    """A zstd frame inside an archive (Super Mario Maker 2: SARC -> zstd -> SARC -> bfsha), with the dictionary its frame header names (ZDICTS) or none"""
++    zstd = zstd_mod()
++    fhd = d[4] if len(d) > 5 else 0
++    n, o = (0, 1, 2, 4)[fhd & 3], 6 - (fhd >> 5 & 1)   # dictionary ID size; it follows the window descriptor, which single-segment frames omit
++    did = int.from_bytes(d[o:o + n], 'little')
++    if not did: return zstd.decompress(d)
++    if did not in ZDICTS: red(f'{label}: a frame needs zstd dictionary {did}, which Pack/ZsDic.pack.zs does not have')
++    if did not in _ZD: _ZD[did] = zstd.ZstdDict(ZDICTS[did])
++    return zstd.decompress(d, zstd_dict=_ZD[did])
++
+ def scan_blob(d, label, out):
+     if d[:4] == b'Yaz0': d = yaz0(d)
++    elif d[:4] == ZSTD_MAGIC: d = nested_zstd(d, label)
+     if d[:4] == b'SARC':
+         for nm, m in sarc_members(d): scan_blob(m, f'{label}/{nm}', out)
+         return
+@@ -1724,7 +1744,7 @@ def scan_file(args):
+         import unityfs
+         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
+         except unityfs.NoTree: return rel, {}, set(), 'defer'
+-    elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and b'Yaz0' in d) and b'\x91\x68\x86\x19' not in d and MGFX not in d and NEEDLE not in d: return rel, {}, set(), {}   # a SARC may hold Yaz0 members
++    elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and (b'Yaz0' in d or ZSTD_MAGIC in d)) and b'\x91\x68\x86\x19' not in d and MGFX not in d and NEEDLE not in d: return rel, {}, set(), {}   # a SARC may hold Yaz0 members
+     else:
+         scan_blob(d, '/' + rel, found)
+         # whole GLSLC outputs in a file no other reader takes (FINAL FANTASY TACTICS - The Ivalice Chronicles: its engine's technique files, resources_nx/…/shader/*.tec, 261 outputs beside
+diff --git a/dm/tools/make_ext_font.py b/dm/tools/make_ext_font.py
+index 67e21f36..d08a5e1e 100644
+--- a/dm/tools/make_ext_font.py
++++ b/dm/tools/make_ext_font.py
+@@ -104,6 +104,7 @@ def build(out, letter_font):
+         return d
+ 
+     pen = TTGlyphPen(None); glyphs['.notdef'] = pen.glyph(); adv['.notdef'] = 500
++    glyph('replacement', [0xE06B], 1000, plate('?', 900))   # Super Mario Maker 2 preloads U+E06B (a squared question mark) as its fallback; without it the font cache lookup returns null
+     for i, t in enumerate(['A', 'B', 'X', 'Y']): glyph('btn' + t, [0xE0A0 + i, 0xE0E0 + i], 1000, round_btn(t))
+     for i, (t, w) in enumerate([('L', 900), ('R', 900), ('ZL', 1200), ('ZR', 1200), ('SL', 1200), ('SR', 1200)]):
+         glyph('btn' + t, [0xE0A4 + i, 0xE0E4 + i], w + 100, plate(t, w))
