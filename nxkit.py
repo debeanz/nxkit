@@ -640,4 +640,7 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
+    if os.name == 'nt' and not sys.flags.utf8_mode:   # nxnative's scripts write their reports and tables with the default encoding, UTF-8 on the Mac; Windows' cp1252 has no '−' (the survey report)
+        os.environ['PYTHONUTF8'] = '1'   # the child processes (the shader split, the rewriter) too
+        sys.exit(subprocess.run([sys.executable, '-X', 'utf8', __file__, *sys.argv[1:]]).returncode)
     sys.exit(main())
