@@ -67,8 +67,9 @@ def run(cmd, **kw):
 
 
 def gh(*args, capture=False):
-    r = subprocess.run(['gh', *map(str, args)], capture_output=capture, text=True)
-    if r.returncode: raise KitError(f'gh {" ".join(map(str, args[:2]))} failed: {(r.stderr or "").strip()[-400:]}')
+    r = subprocess.run(['gh', *map(str, args)], capture_output=True, text=True)   # (stderr always: a failure says why)
+    if not capture and r.stdout.strip(): print(r.stdout.strip(), flush=True)
+    if r.returncode: raise KitError(f'gh {" ".join(map(str, args[:2]))} failed: {((r.stderr or "") + (r.stdout or "")).strip()[-600:]}')
     return r.stdout.strip() if capture else ''
 
 
