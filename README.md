@@ -89,6 +89,9 @@ General, every game:
   multiply in such a texture and parts of them were invisible.
 - **Sound in silent mode**: the app's audio session is Playback instead of SoloAmbient, so games are heard with the
   Ring / Silent switch on silent. `DM_AUDIO_SILENT_SWITCH=1` in `env.txt` follows the switch again.
+- **App life cycle and memory in the log** (iOS): the app going inactive, to the background and back, iOS's memory
+  warnings and memory pressure (with the footprint iOS counts and what is left before the limit). iOS can end an app in
+  the background or over its memory limit without a crash report; the log then shows what came last.
 
 Kirby and the Forgotten Land (`patches/01004D300C5AE000`, testing):
 

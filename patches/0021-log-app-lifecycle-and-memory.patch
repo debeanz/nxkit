@@ -1,0 +1,55 @@
+diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
+index 564307e3..6a6c6c76 100644
+--- a/dm/ios/Sources/front_ios.m
++++ b/dm/ios/Sources/front_ios.m
+@@ -5,6 +5,8 @@
+ #import <Metal/Metal.h>
+ #import <AVFAudio/AVFAudio.h>
+ #include <errno.h>
++#include <mach/mach.h>
++#include <os/proc.h>
+ #include "front.h"
+ #include "hle.h"
+ #include "dm.h"
+@@ -139,6 +141,13 @@ static _Atomic double g_brightness = -1;
+ int dm_thermal_now(void) { return (int)NSProcessInfo.processInfo.thermalState; }
+ int dm_low_power_now(void) { return NSProcessInfo.processInfo.lowPowerModeEnabled; }   // the frame step does not probe in it (hle_nvn.c fstep_cpu_slowed)
+ double dm_brightness_now(void) { return g_brightness; }
++static const char *front_ios_mem_text(void) {   // "footprint N MB, M MB left before the limit" (a static buffer: for the log lines below)
++    static char t[96];
++    task_vm_info_data_t vi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
++    unsigned long long fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &cnt) == KERN_SUCCESS ? vi.phys_footprint >> 20 : 0;
++    snprintf(t, sizeof t, "footprint %llu MB, %llu MB left before the limit", fp, (unsigned long long)(os_proc_available_memory() >> 20));
++    return t;
++}
+ static void front_ios_power_watch(void) {
+     g_brightness = UIScreen.mainScreen.brightness;
+     [NSNotificationCenter.defaultCenter addObserverForName:UIScreenBrightnessDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; g_brightness = UIScreen.mainScreen.brightness; }];
+@@ -147,6 +156,17 @@ static void front_ios_power_watch(void) {
+     [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoPowerStateDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+         (void)n; LOG("front end: Low Power Mode → %s (%.0f s after launch)", dm_low_power_now() ? "on" : "off", (now_ns() - g_t0_ns) / 1e9); }];
+     LOG("front end: thermal state %d, brightness %.2f, Low Power Mode %s", dm_thermal_now(), g_brightness, dm_low_power_now() ? "on" : "off");
++    // iOS's memory warnings and memory pressure (nxkit 0021): it ends an app that stays over its limit without a crash report the app could write, so the
++    // log says how close it was. With the footprint iOS counts (phys_footprint) and what is left before the limit (os_proc_available_memory)
++    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidReceiveMemoryWarningNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
++        (void)n; LOG("[RED] front end: iOS memory warning (%.0f s after launch): %s", (now_ns() - g_t0_ns) / 1e9, front_ios_mem_text()); }];
++    static dispatch_source_t pressure;
++    pressure = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0, DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
++    dispatch_source_set_event_handler(pressure, ^{
++        unsigned long l = dispatch_source_get_data(pressure);
++        LOG("[RED] front end: memory pressure %s (%.0f s after launch): %s", l & DISPATCH_MEMORYPRESSURE_CRITICAL ? "critical" : "warning", (now_ns() - g_t0_ns) / 1e9, front_ios_mem_text());
++    });
++    dispatch_resume(pressure);
+ }
+ 
+ // Frame-rate counter: the frames put on screen in the last second (nvn_mtl.m counts them for NVN and for the Vulkan layer alike; frames the display link merged away are not counted).
+@@ -284,6 +304,9 @@ static void front_ios_audio_watch(void) {
+ // Scene lifecycle (called by SceneDelegate in main.m): 0 resign active, 1 enter background, 2 return to foreground, 3 become active. On entering background, freeze the guest clock and suspend after in-flight GPU work completes (submitting GPU work in background gets the process killed).
+ // The screen stays on while the game is active: only touches reset the idle timer, so with a controller (or during a cutscene) the screen dimmed and locked mid-game
+ void front_ios_focus_event(int ev) {
++    // (nxkit 0021) logged: iOS may end an app in the background without a report, and the log then just stops after the line that says it went there
++    static const char *const what[4] = {"inactive (a notification, Control Center, the app switcher)", "in the background", "back in the foreground", "active"};
++    if (ev >= 0 && ev < 4) LOG("front end: app %s (%.0f s after launch)%s", what[ev], (now_ns() - g_t0_ns) / 1e9, ev == 1 ? "; iOS may end it while it is there" : "");
+     if (!g_layer) return;
+     switch (ev) {
+         case 0: dm_gamepad_reset(); dm_focus_set(2); break;
