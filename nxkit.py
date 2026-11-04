@@ -623,19 +623,31 @@ def prewarm_cmd(a):
     info = json.loads(found[0].read_text())
     man = found[0].parent / 'profile' / info['game'] / 'pso_manifest.tsv'
     if not man.parent.is_dir(): raise KitError(f'{man.parent} does not exist: prewarm sets the list of a provisional or derived profile only (a repository profile has its own)')
-    old = man.read_text(encoding='utf-8').splitlines() if man.is_file() else []
+    old = [l.rstrip('\r') for l in man.read_text(encoding='utf-8').splitlines()] if man.is_file() else []
     head = [l for l in old if l.startswith('#')] or ['# Prewarm seed list (shipped in the app, next to shader_map.tsv). Rows: S<TAB>shader key<TAB>stage / R<TAB>render pipeline key (pso_skey hex) / C<TAB>compute shader key.']
-    rows, seen = [], set()
+    smap = man.with_name('shader_map.tsv')
+    if not smap.is_file(): raise KitError(f'no {smap}: build the game first')
+    known = {c[3] for c in (l.split('\t') for l in smap.read_text(encoding='utf-8', errors='replace').splitlines() if l and not l.startswith('#')) if len(c) > 3}
+    def ours(l):   # every shader the row names is in this game's shader map: copies from other games' apps are left out (a key is 16 hex digits, then a library suffix such as _b)
+        c = l.split('\t')
+        if c[0] != 'R': return len(c) > 1 and c[1][:16] in known
+        try: b = bytes.fromhex(c[1])
+        except (IndexError, ValueError): return False
+        vs, fs = b[:24].split(b'\0')[0].decode('latin1'), b[24:48].split(b'\0')[0].decode('latin1')   # pso_skey: the two library names, 24 bytes each
+        return vs[:16] in known and (not fs or fs[:16] in known)
+    rows, seen, other = [], set(), 0
     for src in [None] + [Path(f) for f in a.files]:
         lines = old if src is None else src.read_text(encoding='utf-8', errors='replace').splitlines()
         for l in lines:
             l = l.rstrip('\r')
             if not l or l.startswith('#') or l.split('\t', 1)[0] not in ('S', 'R', 'C') or l in seen: continue
-            seen.add(l); rows.append(l)
+            seen.add(l)
+            if ours(l): rows.append(l)
+            else: other += 1
     had = sum(1 for l in old if l and not l.startswith('#'))
-    man.write_text('\n'.join(head + rows) + '\n', encoding='utf-8')
+    man.write_bytes(('\n'.join(head + rows) + '\n').encode('utf-8'))   # LF on every system: the host splits the list on \n, and a \r breaks its R and C rows
     n = lambda k: sum(1 for r in rows if r.startswith(k + '\t'))
-    say(f'{man}: {len(rows)} rows ({len(rows) - had} new): {n("S")} shaders, {n("R")} render pipelines, {n("C")} compute pipelines; now build the IPA again (rebuild)')
+    say(f'{man}: {len(rows)} rows ({len(rows) - had} new): {n("S")} shaders, {n("R")} render pipelines, {n("C")} compute pipelines; {other} rows of other games left out; now build the IPA again (rebuild)')
 
 
 def fetch_logs(slug, run_id, dst, password):

@@ -1,0 +1,129 @@
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index c63c917d..ec34eced 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -700,7 +700,8 @@ NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
+ NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
+     memset(c, 0, sizeof(cmd_t)); CB(c)->magic = MAGIC('C', 'M', 'D', 'B'); CB(c)->dev = d; return 1;
+ }
+-NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { CB(c)->magic = 0; }
++static void rec_leave(const cmd_t *o);
++NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { rec_leave(CB(c)); CB(c)->magic = 0; }
+ NVN(nvnCommandBufferSetMemoryCallback, void, NVNcommandBuffer *c, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb) { CB(c)->cb = cb; }
+ NVN(nvnCommandBufferSetMemoryCallbackData, void, NVNcommandBuffer *c, void *d) { CB(c)->cb_data = d; }
+ static uint8_t *align8(uint8_t *p) { return (uint8_t *)(((uintptr_t)p + 7) & ~(uintptr_t)7); }
+@@ -813,8 +814,37 @@ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) { return cmd_alloc_keep(o, si
+ // A recording starts with its first command, as in NVN: no BEGIN record, so an empty recording takes only its END. Games size command memory by GetCommandMemoryUsed
+ // (nvn_obj.h draw_rec): Breath of the Wild sums one scratch recording per mesh and per shape and render pass into each model's prerecorded commands, and with an
+ // 8-byte BEGIN on each of several hundred recordings a model came out a 4 KB page over its resource size table entry
++// (nxkit 0024) One thread at a time records on a command buffer. A game's graphics contexts can share one (Super Mario Maker 2: every context starts on the same global buffer,
++// main+0x2e6f4c, and its Mii and picture jobs record on workers). On the Switch threads of one core with different priorities never run at once, so these recordings do not overlap;
++// here every guest thread runs in parallel, and two of them scribbled in one list ("BeginRecording re-entered", then a CALL record pointing at 0x1 or 0x3: a crash in the replay, or a
++// frozen picture). So a second thread's BeginRecording waits for the first one's EndRecording. A wait that outlasts REC_WAIT_S goes on as before, so this can't hang the game
++#define REC_MAX 256
++#define REC_WAIT_S 2
++static struct { const cmd_t *o; pthread_t t; } g_rec[REC_MAX];
++static int g_nrec;
++static pthread_mutex_t g_rec_mu = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t g_rec_cv = PTHREAD_COND_INITIALIZER;
++static void rec_enter(const cmd_t *o) {
++    pthread_t me = pthread_self(); int waited = 0, gave_up = 0; struct timespec until; uint64_t t0 = 0;
++    pthread_mutex_lock(&g_rec_mu);
++    for (;;) {
++        int i = 0; while (i < g_nrec && g_rec[i].o != o) i++;
++        if (i == g_nrec) { if (g_nrec < REC_MAX) { g_rec[g_nrec].o = o; g_rec[g_nrec].t = me; g_nrec++; } break; }
++        if (pthread_equal(g_rec[i].t, me)) break;   // this thread again: a recording it never ended
++        if (!waited) { waited = 1; t0 = now_ns(); clock_gettime(CLOCK_REALTIME, &until); until.tv_sec += REC_WAIT_S; }
++        if (pthread_cond_timedwait(&g_rec_cv, &g_rec_mu, &until)) { g_rec[i].t = me; gave_up = 1; break; }
++    }
++    pthread_mutex_unlock(&g_rec_mu);
++    if (waited) { static int n; if (n++ < 16) LOG("[nvn] command buffer %p: another thread was recording on it, %s after %.1f ms (%d so far, nxkit 0024)", (const void *)o, gave_up ? "[RED] going on anyway" : "waited", (now_ns() - t0) / 1e6, n); }
++}
++static void rec_leave(const cmd_t *o) {
++    pthread_mutex_lock(&g_rec_mu);
++    for (int i = 0; i < g_nrec; i++) if (g_rec[i].o == o) { g_rec[i] = g_rec[--g_nrec]; pthread_cond_broadcast(&g_rec_cv); break; }
++    pthread_mutex_unlock(&g_rec_mu);
++}
+ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
+     cmd_t *o = CB(c);
++    rec_enter(o);
+     if (o->recording) LOG("[RED] BeginRecording re-entered");
+     o->recording = 2;   // 2: recording, no command yet (cmd_alloc sets begin)
+ }
+@@ -822,7 +852,9 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
+     cmd_t *o = CB(c);
+     uint8_t *p = cmd_alloc_keep(o, 8, 0); put_hdr(p, OP_END, 8);   // nothing follows: the END may take the segment's last bytes
+     o->recording = 0;
+-    return (NVNcommandHandle)o->begin;
++    NVNcommandHandle handle = (NVNcommandHandle)o->begin;   // (read before another thread may begin on this buffer)
++    rec_leave(o);
++    return handle;
+ }
+ NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording != 0; }
+ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 65ec8a17..1b127983 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -5764,6 +5764,13 @@ static const uint64_t *g_rest; static int g_nrest;      // Handles in this submi
+ // (nxkit 0022) A JUMP / CALL target that cannot be a command list (below 64 KB or with high address bits set): the record or the list it points into was
+ // overwritten, a recording whose memory was reused. Super Mario Maker 2 crashed here (sig 11 at address 0x1) soon after its command memory first overflowed into a
+ // host-lent segment. The record is skipped, as a list that ends there, and the first few are logged with where they were
++// (nxkit 0024) A record header that cannot be one: no known operation, or a size that would not move the walk on (the replay's for (;;) then spun for ever on it, holding the
++// submission: Super Mario Maker 2's picture froze with sound running on, after an overwritten list). The list ends there; the first few are logged
++static int rec_bad(const op_hdr *h, const void *rec) {
++    if (h->op < OP_COUNT_ && h->size >= 8 && h->size < (1u << 28)) return 0;
++    static int n; if (n++ < 8) MLOG("[RED] command lists: a record at %p has operation %u, size %u, which is no record (overwritten); its list ends there, %d so far (nxkit 0024)", rec, h->op, h->size, n);
++    return 1;
++}
+ static int cmd_target_bad(const void *t, const char *what, const void *rec) {
+     uintptr_t v = (uintptr_t)t;
+     if (v >= 0x10000 && !(v >> 48)) return 0;
+@@ -5784,6 +5791,7 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
+     for (int guard = 0; guard < 1000000; guard++) {
+         if (!c->p) return 0;
+         op_hdr h; memcpy(&h, c->p, sizeof h); const void *a = c->p + 8;
++        if (rec_bad(&h, c->p)) { c->bad = 1; return 0; }
+         switch (h.op) {
+             case OP_END:
+                 if (c->ret_n) c->p = c->ret[--c->ret_n];
+@@ -5854,6 +5862,7 @@ static int g_ds_why; static int g_ds_scanned; static int g_ds_need;   // g_ds_ne
+ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
+     for (int guard = 0; guard < 1000000; guard++) {
+         op_hdr h; memcpy(&h, p, sizeof h);
++        if (rec_bad(&h, p)) return DS_USED;
+         const void *a = p + 8; g_ds_scanned++;
+         if (g_hoist_n && hoist_skipped(p)) { p += h.size; continue; }   // Clear pass already executed early
+         switch (h.op) {
+@@ -6311,6 +6320,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
+     if (depth > 64) { g_sdx_ok = 0; return; }
+     for (uint32_t guard = 0; guard < 4000000 && p && g_sdx_ok; guard++) {
+         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
++        if (rec_bad(&h, p)) return;
+         if (g_sdx_nop == g_sdx_opcap) { g_sdx_opcap = g_sdx_opcap ? g_sdx_opcap * 2 : 16384; g_sdx_op = realloc(g_sdx_op, g_sdx_opcap * sizeof *g_sdx_op); }
+         uint32_t seq = g_sdx_nop; g_sdx_op[g_sdx_nop++] = p;
+         switch (h.op) {
+@@ -6431,6 +6441,7 @@ static void hoist_try(void) {
+     const uint8_t *p = g_exec_next;
+     for (int guard = 0; guard < 200000; guard++) {
+         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
++        if (rec_bad(&h, p)) return;
+         switch (h.op) {
+             case OP_END: case OP_CALL: case OP_COPY_T2T: case OP_COPY_B2T: case OP_COPY_T2B: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_RENDER_COND: return;
+             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) return; p = t; continue; }
+@@ -6715,6 +6726,7 @@ static void defer_try(const p_draw *dw, const p_draw_idx *di) {
+     const uint8_t *p = g_exec_next, *p_end = NULL, *qop = NULL; const p_set_rt *q = NULL; p_set_rt scan_rt = R.rt; int srt_hit = -1, ci = 0, draws = 1, p_has_draw = 1; defer_collect_reads(&g_defer, pg, tex, img);   // The current draw is P's first
+     for (int guard = 0; guard < 200000; guard++) {
+         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
++        if (rec_bad(&h, p)) goto fail;
+         if (g_hoist_n && hoist_skipped(p)) { p += h.size; continue; }
+         switch (h.op) {
+             case OP_END: { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 1; goto fail; } p = nx; continue; }
+@@ -8684,6 +8696,7 @@ void mtl_exec(const uint8_t *p) {
+     int trace = dump_all && passdump();   // Normal mode does not check the frame range per operation; the full command position is only used for the designated diagnostic frames
+     for (;;) {
+         op_hdr h; memcpy(&h, p, sizeof h);
++        if (rec_bad(&h, p)) { h.op = OP_END; h.size = 8; }   // (nxkit 0024) ends this list as its END would
+         g_exec_cur = p;   // Scan start point of the store lookahead: the operation that ends the render pass (inclusive)
+         if (p == g_defer_pend) { for (int gi = 0; gi < 4; gi++) if (g_defer_slots[gi].active && g_defer_slots[gi].p_end_op == p) g_defer_slots[gi].in_p = 0; g_defer_pend = NULL; }
+         sdx_seq(p);
