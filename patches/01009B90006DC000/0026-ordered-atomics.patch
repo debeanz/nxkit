@@ -1,0 +1,46 @@
+diff --git a/dm/games/01009B90006DC000/patches.py b/dm/games/01009B90006DC000/patches.py
+index d6114213..6786d75a 100644
+--- a/dm/games/01009B90006DC000/patches.py
++++ b/dm/games/01009B90006DC000/patches.py
+@@ -42,3 +42,5 @@ OBS = {
+     (0x17661f0, 22, 'f81d0ff5', 'cDownload exec entry: str x21, [sp, #-0x30]! (position independent)'),
+   ],
+ }
++# The job queue and the game's other relaxed atomics need ordering on Apple's cores (patch_nso.py "Ordered atomics"; nxkit 0026)
++ORDERED_ATOMICS = {'c2dc405ac414c37c8b1c50219c7a0f0c': 'relaxed ldxr / stxr locks'}
+diff --git a/dm/tools/patch_nso.py b/dm/tools/patch_nso.py
+index 9da7f076..b9cfc27c 100644
+--- a/dm/tools/patch_nso.py
++++ b/dm/tools/patch_nso.py
+@@ -67,11 +67,12 @@ else:
+ #   OBS = {build ID: [(offset, number, original instruction word, reason)]}: observation gates. Numbers match OBS_* in the host's hle.h; the original instruction must be position
+ #     independent (no PC-relative / branch / anything involving x18 or tpidr), asserted offline; when the host has no callback attached the gate block goes in and out once and returns
+ #   FRAME_STEP = {build ID: function(ctx)}: the frame step stubs of a main ("Frame step in whole vsyncs" below)
++#   ORDERED_ATOMICS = {build ID: reason}: every exclusive load and store of the module's code gets acquire / release ("Ordered atomics" below)
+ #   MATCH_CUTS = {module name: [nso_match rule, ...]}: fallback for modules without registered CUTS. Only the repository profile selected by DM_GAME participates,
+ #     including when DM_GAMES_DIR selects a derived profile. Missing or ambiguous matches are reported and skipped; known builds retain their exact CUTS.
+ PATCH_FILES = [os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sdk_patches.py')] + sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../games/*/patches.py')))
+ def load_patches():
+-    tables, where = {'CUTS': {}, 'OBS': {}, 'FRAME_STEP': {}, 'MATCH_CUTS': {}}, {}
++    tables, where = {'CUTS': {}, 'OBS': {}, 'FRAME_STEP': {}, 'ORDERED_ATOMICS': {}, 'MATCH_CUTS': {}}, {}
+     for n, path in enumerate(PATCH_FILES):
+         spec = importlib.util.spec_from_file_location(f'patches_{n}', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+         for kind, table in tables.items():
+@@ -460,6 +461,17 @@ starts = sorted(x for x in starts if x < TEXT_END)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ import nso_code
+ DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)
++# Ordered atomics (nxkit 0026). Code built with relaxed atomics takes its locks with ldxr / stxr and no barrier, so the loads inside a critical section may run before the lock is held. The Switch's
++# Cortex-A57 practically never shows it; Apple's cores do. Super Mario Maker 2's job queue (main+0x29d5c8) can read the next job before it holds the lock; two threads on one job would write one display list, which fits its logs (not seen directly):
++# records crossed, a CALL to 0x1 or 0x3, a crash or a frozen picture after minutes of play. ldaxr / stlxr have the same size and only order more, so each stays where it is
++if BUILD_ID in PATCHES['ORDERED_ATOMICS']:
++    n_ordered = 0
++    for o_ in range(0, TEXT_END, 4):
++        w_ = struct.unpack_from('<I', IMG, o_)[0]
++        # size 001000 0 L 0 Rs o0=0 11111 Rn Rt, and a load has Rs = 11111
++        if w_ & 0x3FA0FC00 == 0x08007C00 and (not w_ >> 22 & 1 or w_ >> 16 & 31 == 31) and not any(s_ <= o_ < e_ for s_, e_ in DATA_BLOCKS):
++            struct.pack_into('<I', IMG, o_, w_ | 0x8000); n_ordered += 1
++    print(NAME, 'ordered atomics:', n_ordered, 'exclusive loads and stores')
+ CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))
+ md_lite = Cs(CS_ARCH_ARM64, CS_MODE_ARM)   # no details: the x18 scan reads only the operand text
+ R18 = re.compile(r'\b[xw]18\b')
