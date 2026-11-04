@@ -1,0 +1,120 @@
+diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
+index 8e16fc3..ad8351e 100644
+--- a/dm/host/hle_svc.c
++++ b/dm/host/hle_svc.c
+@@ -66,6 +66,87 @@ static int mem_file_open(size_t size) {
+     LOG("guest memory: a shared mapping of an unlinked file in %s (%llu MB free there): out of the footprint, paged to the file under memory pressure", dir, (unsigned long long)(avail >> 20));
+     return fd;
+ }
++// nxkit (mem-anon.patch): with mem_file, parts of the guest block are anonymous memory, in the footprint, instead of the file's pages. iOS counts a file's pages as a cache
++// it may write back and drop at any time, and they do not count as pressure, so background apps keep their memory meanwhile: on a phone whose RAM cannot hold the footprint and
++// the file together (iPhone 15 Pro Max: 8 GB, a race 3.3 GB of footprint with about 4 GB of guest memory), the game waits on reads from flash. Anonymous memory is the foreground
++// app's own: under pressure it is compressed in memory and background apps are ended first. The parts are fixed before the game runs, so every alias of a page (vm_remap) is made
++// over the memory it keeps. DM_MEM_ANON (also from Documents/env.txt): comma-separated alias, stack, heap=<MB from the start of the heap>, or off; default alias,stack,heap=512.
++// The footprint grows by what the game keeps resident in them (log 23: alias region about 1 GB); the limit in LiveContainer on that phone is about 6 GB
++#define ANON_MAX 4
++static uintptr_t g_anon_lo[ANON_MAX], g_anon_hi[ANON_MAX]; static int g_nanon;
++static void anon_add(const char *what, uint8_t *lo, size_t n) {
++    if (!n || g_nanon >= ANON_MAX) return;
++    if (mmap(lo, n, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED) { LOG("[RED] guest memory: the %s part (%zu MB) not made anonymous (errno %d): it stays in the file", what, n >> 20, errno); return; }
++    g_anon_lo[g_nanon] = (uintptr_t)lo; g_anon_hi[g_nanon] = (uintptr_t)lo + n; g_nanon++;
++    LOG("guest memory: the %s part %p +%zu MB is anonymous memory, in the footprint (DM_MEM_ANON)", what, (void *)lo, n >> 20);
++}
++static void mem_anon_parts(void) {
++    if (g_memfd < 0) return;
++    const char *e = getenv("DM_MEM_ANON"); if (!e || !*e) e = "alias,stack,heap=512";
++    if (!strcmp(e, "off") || !strcmp(e, "0")) { LOG("guest memory: DM_MEM_ANON=%s: all of it in the file", e); return; }
++    char buf[128]; snprintf(buf, sizeof buf, "%s", e);
++    size_t pg = (size_t)getpagesize();
++    for (char *s = buf, *t; (t = strsep(&s, ",")); ) {
++        if (!strcmp(t, "alias")) anon_add("alias", g_alias, g_alias_cap);
++        else if (!strcmp(t, "stack")) anon_add("stack", g_stack, g_stack_cap);
++        else if (!strncmp(t, "heap=", 5)) { size_t n = ((size_t)strtoull(t + 5, NULL, 0) << 20) & ~(pg - 1); if (n > g_heap_cap) n = g_heap_cap; anon_add("heap", g_heap, n); }
++        else if (*t) LOG("[RED] DM_MEM_ANON: %s is not alias, stack, heap=<MB> or off", t);
++    }
++}
++static int guest_anon_at(uintptr_t a, uintptr_t *end) {   // → 1 when a lies in an anonymous part; *end: where that run (anonymous or file) ends
++    uintptr_t nx = UINTPTR_MAX;
++    for (int i = 0; i < g_nanon; i++) {
++        if (a >= g_anon_lo[i] && a < g_anon_hi[i]) { *end = g_anon_hi[i]; return 1; }
++        if (g_anon_lo[i] > a && g_anon_lo[i] < nx) nx = g_anon_lo[i];
++    }
++    *end = nx; return 0;
++}
++// nxkit (mem-anon.patch): every 10 s, what is resident of the guest block (mincore) and how much the system pages: the log line "[mem] watch". DM_MEM_WATCH=0 turns it off
++static double g_t0;
++static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_UPTIME_RAW, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
++static void *mem_watch_thread(void *arg) {
++    (void)arg; pthread_setname_np("dm memory watch"); pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
++    size_t pg = (size_t)getpagesize(); enum { CH = 4096, NB = 16 }; char *v = malloc(CH);
++    uint64_t kpg = vm_kernel_page_size, p_pi = 0, p_fa = 0, p_po = 0, p_dc = 0; int first = 1;
++    if (!v) return NULL;
++    for (;;) {
++        sleep(10);
++        uint64_t anon = 0, file = 0, refd = 0, al = 0, st = 0, hb[NB] = {0};
++        for (uintptr_t c = (uintptr_t)g_as, end = c + g_reserve; c < end; c += CH * pg) {
++            size_t n = (size_t)(end - c) / pg < CH ? (size_t)(end - c) / pg : CH;
++            if (mincore((void *)c, n * pg, v)) continue;
++            uintptr_t run_end = 0; int an = 0;
++            for (size_t i = 0; i < n; i++) {
++                uintptr_t a = c + i * pg;
++                if (a >= run_end) an = guest_anon_at(a, &run_end);
++                if (!(v[i] & MINCORE_INCORE)) continue;
++                if (an) anon += pg; else file += pg;
++                if (v[i] & MINCORE_REFERENCED) refd += pg;
++                if (a >= (uintptr_t)g_alias && a < (uintptr_t)g_alias + g_alias_cap) al += pg;
++                else if (a >= (uintptr_t)g_stack && a < (uintptr_t)g_stack + g_stack_cap) st += pg;
++                else if (a >= (uintptr_t)g_heap) { size_t b = (a - (uintptr_t)g_heap) >> 30; hb[b < NB ? b : NB - 1] += pg; }
++            }
++        }
++        task_events_info_data_t te; mach_msg_type_number_t c1 = TASK_EVENTS_INFO_COUNT;
++        if (task_info(mach_task_self(), TASK_EVENTS_INFO, (task_info_t)&te, &c1) != KERN_SUCCESS) memset(&te, 0, sizeof te);
++        task_vm_info_data_t ti; mach_msg_type_number_t c2 = TASK_VM_INFO_COUNT;
++        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&ti, &c2) != KERN_SUCCESS) memset(&ti, 0, sizeof ti);
++        vm_statistics64_data_t vs; mach_msg_type_number_t c3 = HOST_VM_INFO64_COUNT;
++        if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vs, &c3) != KERN_SUCCESS) memset(&vs, 0, sizeof vs);
++        uint64_t pi = (uint64_t)te.pageins, fa = (uint64_t)te.faults, po = vs.pageouts, dc = vs.decompressions;
++        char hl[160]; int k = 0; size_t nb = (g_heap_cap + (1u << 30) - 1) >> 30; if (nb > NB) nb = NB;
++        for (size_t b = 0; b < nb && k < (int)sizeof hl - 8; b++) k += snprintf(hl + k, sizeof hl - k, "%s%llu", b ? " " : "", (unsigned long long)(hb[b] >> 20));
++        LOG("[mem] watch (%.0f s): page-ins %s%llu, faults %s%llu in 10 s; footprint %llu MB (compressed %llu), file pages resident %llu MB; system: free %llu MB, file cache %llu MB, compressor %llu MB, page-outs +%llu, decompressions +%llu; "
++            "guest resident: anonymous parts %llu MB, file %llu MB, referenced %llu MB; alias %llu MB, stack %llu MB, heap by GB [%s]",
++            now_s() - g_t0, first ? "" : "+", (unsigned long long)(first ? pi : pi - p_pi), first ? "" : "+", (unsigned long long)(first ? fa : fa - p_fa),
++            (unsigned long long)(ti.phys_footprint >> 20), (unsigned long long)(ti.compressed >> 20), (unsigned long long)(ti.external >> 20),
++            (unsigned long long)(vs.free_count * kpg >> 20), (unsigned long long)(vs.external_page_count * kpg >> 20), (unsigned long long)(vs.compressor_page_count * kpg >> 20),
++            (unsigned long long)(first ? 0 : po - p_po), (unsigned long long)(first ? 0 : dc - p_dc),
++            (unsigned long long)(anon >> 20), (unsigned long long)(file >> 20), (unsigned long long)(refd >> 20), (unsigned long long)(al >> 20), (unsigned long long)(st >> 20), hl);
++        p_pi = pi; p_fa = fa; p_po = po; p_dc = dc; first = 0;
++    }
++    return NULL;
++}
+ static void *alias_windows_thread(void *arg);
+ static void *regions_thread(void *arg);
+ static void *zero_sweep_thread(void *arg);
+@@ -93,6 +174,9 @@ static void mem_init_once(void) {
+     g_alias = g_as + 0x10000000; g_alias_cap = alias;
+     g_stack = g_alias + g_alias_cap; g_stack_cap = DM_GAME_MEM_STACK;
+     g_heap  = g_stack + g_stack_cap; g_heap_cap  = g_reserve - (size_t)(g_heap - g_as);
++    mem_anon_parts();   // nxkit (mem-anon.patch)
++    g_t0 = now_s();
++    { const char *mw = getenv("DM_MEM_WATCH"); if (!mw || !*mw || atoi(mw)) { pthread_t th; if (!pthread_create(&th, NULL, mem_watch_thread, NULL)) pthread_detach(th); } }
+     if (!(g_alias_bits = calloc((g_alias_cap >> 18) + 1, sizeof *g_alias_bits))) die("alias region page bitmap calloc");
+     if (!(g_alias_exposed = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_exposed))) die("alias exposure bitmap calloc");
+     LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)g_reserve, g_heap, g_alias, g_stack);
+@@ -281,8 +365,15 @@ static void *zero_sweep_thread(void *arg) {
+     }
+     return NULL;
+ }
+-static int guest_release(uintptr_t lo, uintptr_t hi) {
+-    if (g_memfd >= 0) {   // mem_file: a hole in the file. Pages a no-copy buffer holds stay as they are, bytes and all (measured): then the range is not fresh
++static int guest_release_part(uintptr_t lo, uintptr_t hi, int in_file);
++static int guest_release(uintptr_t lo, uintptr_t hi) {   // nxkit (mem-anon.patch): each run by what holds it, the file or an anonymous part (DM_MEM_ANON)
++    if (g_memfd < 0 || !g_nanon) return guest_release_part(lo, hi, g_memfd >= 0);
++    int fresh = 1;
++    for (uintptr_t a = lo, e; a < hi; a = e) { int an = guest_anon_at(a, &e); if (e > hi) e = hi; fresh &= guest_release_part(a, e, !an); }
++    return fresh;
++}
++static int guest_release_part(uintptr_t lo, uintptr_t hi, int in_file) {
++    if (in_file) {   // mem_file: a hole in the file. Pages a no-copy buffer holds stay as they are, bytes and all (measured): then the range is not fresh
+         if (mprotect((void *)lo, hi - lo, PROT_NONE)) die("guest_release mprotect %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(hi - lo), errno);
+         fpunchhole_t ph = {0, 0, (off_t)(lo - (uintptr_t)g_as), (off_t)(hi - lo)};
+         if (fcntl(g_memfd, F_PUNCHHOLE, &ph)) { static _Atomic int nred; if (atomic_fetch_add(&nred, 1) < 8) LOG("[RED] guest memory %#lx+%#lx: no hole punched (errno %d): it keeps its bytes", (unsigned long)lo, (unsigned long)(hi - lo), errno); return 0; }

@@ -1,7 +1,8 @@
 # The Mac part of a Mario Kart World build with Plumber Racer 2 (cheemu21/plumber-racer-2, nxnative with Mario Kart World on the iPhone): runs on a push to the pr2-ipa branch, after the
 # PC attached its input encrypted (release pr2-ipa-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit; deleted as soon as it is
 # downloaded): the dump's ExeFS and the RomFS folders the build reads (Shader, Lib, Effect, Layout, UI, System), and the shader cache of an earlier run when there is one. Plumber Racer 2 is checked
-# out at PR2_REF with nxkit's display options (pr2/display-options.patch: launcher Resolution and Screen Scaling), then its NSP script builds the IPA without the game files
+# out at PR2_REF with nxkit's display options (pr2/display-options.patch: launcher Resolution and Screen Scaling) and memory parts (pr2/mem-anon.patch: with mem_file, the alias
+# region, the stacks and the first 512 MB of the heap stay anonymous memory, DM_MEM_ANON; a "[mem] watch" log line every 10 s), then its NSP script builds the IPA without the game files
 # (--romfs separate). Output, encrypted: the slim IPA as the artifact "ipa" (the PC adds the whole RomFS image and deletes the artifacts), the shader cache as "shaders", or the
 # build logs as "logs".
 name: PR2 IPA
@@ -59,8 +60,10 @@ jobs:
           xcodebuild -version; xcrun metal --version
           python3 pr2/dm/gfx/tools/own_compilers.py --check-metal
 
-      - name: Apply nxkit's display options
-        run: git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/display-options.patch"
+      - name: Apply nxkit's display options and memory parts
+        run: |
+          git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/display-options.patch"
+          git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/mem-anon.patch"
 
       - name: Download the input and delete its release
         env:
