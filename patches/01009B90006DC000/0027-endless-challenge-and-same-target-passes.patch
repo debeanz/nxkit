@@ -1,0 +1,380 @@
+diff --git a/dm/games/01009B90006DC000/patches.py b/dm/games/01009B90006DC000/patches.py
+index 6786d75a..4a78a7d8 100644
+--- a/dm/games/01009B90006DC000/patches.py
++++ b/dm/games/01009B90006DC000/patches.py
+@@ -32,6 +32,15 @@ CUTS = {
+     (0x14e30e0, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'PostPlayResult: svc #0x8f; ret (answered by hle_smm2_online.c)'),
+     (0x14ebc60, 'ff8306d1fc5f16a9', 'e11100d4c0035fd6', 'CanPostRatingAndComment: svc #0x8f; ret (answered by hle_smm2_online.c)'),
+     (0x14e6b90, 'ff0305d1fc8300f9', 'e11100d4c0035fd6', 'PostRatingInfo: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ec2d0, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'GetEndlessModeStatus: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ece20, 'ff4304d1fc4f0fa9', 'e11100d4c0035fd6', 'InitEndlessMode: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ed750, 'ff4306d1fc6f13a9', 'e11100d4c0035fd6', 'GetEndlessModePlayInfo: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14eddc0, 'ff8304d1fc7b00f9', 'e11100d4c0035fd6', 'GetEndlessModeRank: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ecf30, 'ff0305d1fc5711a9', 'e11100d4c0035fd6', 'StartEndlessModeCourse: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ed120, 'ff4305d1fc9300f9', 'e11100d4c0035fd6', 'DominateEndlessModeCourse: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ed5e0, 'ffc304d1fc8300f9', 'e11100d4c0035fd6', 'PassEndlessModeCourse: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ed360, 'ff8304d1fc7b00f9', 'e11100d4c0035fd6', 'SuspendEndlessMode: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ed4a0, 'ff8304d1fc7b00f9', 'e11100d4c0035fd6', 'FinishEndlessMode: svc #0x8f; ret (answered by hle_smm2_online.c)'),
+     (0x14f2910, 'fc5fbca9f65701a9', 'e11100d4c0035fd6', 'ReportFromBugDetection: svc #0x8f; ret (answered by hle_smm2_online.c)'),
+   ],
+ }
+diff --git a/dm/games/game.py b/dm/games/game.py
+index eb21bf0e..008de69f 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -120,6 +120,8 @@ def header(g):
+     if sks and (not m or not 0x30 <= int(m[1], 0) or not 0 < int(m[2], 0) or int(m[1], 0) + int(m[2], 0) > 0x880 or (int(m[1], 0) < 0x760 and int(m[1], 0) + int(m[2], 0) > 0x700)):   # not over +0x700..+0x75f, the code area and compute fields the tools read
+         sys.exit(f'{g.id}: shader_key_skip takes <offset>+<length> within the first 0x880 bytes of the control section, past its header (+0x30) and clear of +0x700..+0x75f: {sks}')
+     sko, skl = (int(m[1], 0), int(m[2], 0)) if m else (0, 0)
++    rtc = g.get('rt_continue', 'off')   # SetRenderTargets to the targets already set continues the render pass unless a barrier let a draw read them (nvn_mtl.m rt_cont_on): on / off
++    if rtc not in ('on', 'off'): sys.exit(f'{g.id}: rt_continue must be on or off: {rtc}')
+     rcd = g.get('render_cond', 'off')   # NVN conditional rendering evaluated at replay, timestamp reports with counter 0 (nvn_mtl.m OP_RENDER_COND): on / off
+     if rcd not in ('on', 'off'): sys.exit(f'{g.id}: render_cond must be on or off: {rcd}')
+     tfu = g.get('tex_flush_upload', 'off')   # textures written by the CPU into a pool and published with nvnMemoryPoolFlushMappedRange are uploaded like packaged ones (hle_nvn.c): on / off
+@@ -176,6 +178,7 @@ def header(g):
+          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
+          f'#define DM_GAME_SHADER_KEY_SKIP_OFF {sko:#x}', f'#define DM_GAME_SHADER_KEY_SKIP_LEN {skl:#x}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
++         f'#define DM_GAME_RT_CONTINUE {int(rtc == "on")}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index c10edce5..fa81039b 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1488,6 +1488,9 @@ static void power_line(uint64_t frame) {
+         void mtl_lc_stats(uint64_t *, uint64_t *); static uint64_t plt, pll; uint64_t lt, ll; mtl_lc_stats(&lt, &ll);
+         void mtl_ubp_why(uint64_t w[5]); static uint64_t pw5[5]; uint64_t w5[5]; mtl_ubp_why(w5);
+         uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
++        { void mtl_rtc_stats(uint64_t *, uint64_t *, uint64_t *); void dm_gfx_passdump_next(long); static uint64_t pm_, pb_, po_; static int dumped; uint64_t m_, b_, o_; mtl_rtc_stats(&m_, &b_, &o_);   // (nxkit 0027)
++          LOG("[nvn] render targets set up to frame %llu, per frame: the same again, pass goes on %.1f / kept apart by a barrier %.1f; other targets %.1f (nxkit 0027)", (unsigned long long)frame, (m_ - pm_) / nf, (b_ - pb_) / nf, (o_ - po_) / nf); pm_ = m_; pb_ = b_; po_ = o_;
++          if (!dumped && (fu - pfu) / nf >= 60) { dumped = 1; LOG("[nvn] %.0f load-all store-all passes a frame: the next frame's passes follow in the log, once (nxkit 0027)", (fu - pfu) / nf); dm_gfx_passdump_next(1); } }
+         LOG("[nvn] residency set up to frame %llu: %s; draw-pass entry barriers full %llu / saved %llu; split submits %llu (%llu after buffer → texture copies); passes broken by copies / buffer updates %llu; in-pass uniform updates deferred %llu, passes ended to land them for a read %llu, partly covered blocks read from memory %llu (cached %llu, refused %llu: other GPU writes %llu, earlier submission running %llu, copy or fill queued %llu, size %llu, unreadable %llu); waiting clears taken by a later pass %llu, landed in passes of their own %llu; "
+             "attachments per frame load %.0f MB / store %.0f MB, load-all store-all passes %.0f, saved by not storing unwritten attachments %.1f MB", frame, rs, (unsigned long long)(bf - pbf), (unsigned long long)(bs - pbs),
+             (unsigned long long)(cut - pcut), (unsigned long long)(ccut - pccut), (unsigned long long)(bsp - pbsp), (unsigned long long)(ud - pud), (unsigned long long)(uc - puc), (unsigned long long)(pm - ppm), (unsigned long long)(pr - ppr), (unsigned long long)(pf_ - ppf), (unsigned long long)(w5[1] - pw5[1]), (unsigned long long)(w5[2] - pw5[2]), (unsigned long long)(w5[3] - pw5[3]), (unsigned long long)(w5[0] - pw5[0]), (unsigned long long)(w5[4] - pw5[4]), (unsigned long long)(lt - plt), (unsigned long long)(ll - pll),
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index d41f9ba7..d42fbb5d 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -2576,6 +2576,14 @@ static int g_enc_mode;          // How the current encoder was opened (rp_begin_
+ static int g_rt_range_active, g_rt_range_pending;
+ static int g_rt_merged;         // The current pass has already been continued (at least one same-target SetRenderTargets was merged in)
+ static uint64_t g_rt_merge_n;   // Cumulative continuation count
++// (nxkit 0027, profile key rt_continue) With the TBDR optimizations off every SetRenderTargets ended the pass, also one to the targets already set, and each new pass loads and stores its whole
++// attachments. Super Mario Maker 2's Ghost House courses opened about 100 full-screen passes a frame this way (550 MB loaded and stored a frame, GPU 20 ms; 45 small passes and 7 ms elsewhere). Why the
++// optimizations stay off is bindless textures: nothing tells which textures a draw reads. A game that reads a target it just drew to must say so with a barrier, so a barrier that orders fragments or
++// invalidates textures keeps the next pass apart; without one a continuation changes nothing a correct game can see. DM_NVN_RT_CONTINUE=0 / 1 overrides the key
++static int g_rt_tex_barrier;   // such a barrier since this pass began
++static uint64_t g_rtc_merged, g_rtc_barrier, g_rtc_other;
++static int rt_cont_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_RT_CONTINUE"); v = e ? atoi(e) != 0 : DM_GAME_RT_CONTINUE; } return v; }
++void mtl_rtc_stats(uint64_t *m, uint64_t *b, uint64_t *o) { *m = g_rtc_merged; *b = g_rtc_barrier; *o = g_rtc_other; }
+ static int g_defer_replaying;
+ static void fz_end(void);   // Wrap-up of the readable-tile pass merge (defined before draw)
+ static void defer_fallback(void);
+@@ -2908,6 +2916,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
+     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }   // the copy encoder the shadows' blocks were moved in with (bcrt_attach)
+     ser_gate();
+     g_enc = enc_r_begin_pass(pd);
++    g_rt_tex_barrier = 0;
+     args_dirty_all();
+     g_stat_pass++;
+     if (enc_label_on()) { id<MTLTexture> lt = pd.colorAttachments[0].texture ?: pd.depthAttachment.texture ?: pd.stencilAttachment.texture; g_el_w = (int)lt.width; g_el_h = (int)lt.height; g_el_draws = 0; g_el_key[0] = 0; }
+@@ -8768,6 +8777,11 @@ void mtl_exec(const uint8_t *p) {
+                     g_rt_merged = g_rt_range_active = g_rt_range_pending = 1; R.rt = *r; break; }
+                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
+                     g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); break; }
++                if (!tbdr_on() && rt_cont_on() && g_enc && R.has_rt) {   // (nxkit 0027)
++                    if (g_enc_mode == 1 || pend || !rt_same(&R.rt, r)) g_rtc_other++;
++                    else if (g_rt_tex_barrier) g_rtc_barrier++;
++                    else { g_rtc_merged++; g_rt_merged = 1; PD("M %llu same targets again: the pass goes on", g_stat_pass); R.rt = *r; break; }
++                }
+                 // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
+                 if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_on() && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); R.rt = *r; break; }
+                 if (pend && !g_enc && g_cb && lc_on()) lc_push(); else rp_flush();   // clears with no draw wait for the next pass that attaches their targets (lc_push)
+@@ -8830,6 +8844,7 @@ void mtl_exec(const uint8_t *p) {
+                 int split = g_enc && g_pass_swrite && (bits & (NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_ORDER_FRAGMENTS_TILED_BIT));
+                 PD("I %llu barrier bits %#x%s", g_stat_pass, bits, split ? ": ends the pass (shader writes)" : g_enc ? " (render pass open)" : "");
+                 if (split) { rp_end(); static int once; if (!once++) MLOG("a game barrier (bits %#x) after shader writes in a draw pass: the pass ends there (first case pass %llu)", bits, (unsigned long long)g_stat_pass); }
++                if (g_enc && (bits & (NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_ORDER_FRAGMENTS_TILED_BIT | NVN_BARRIER_INVALIDATE_TEXTURE_BIT))) g_rt_tex_barrier = 1;   // (nxkit 0027)
+                 if (bits) g_game_barrier = 1; break; }
+             case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: state_op(h.op, a); break;
+             default: break;
+diff --git a/dm/host/hle_smm2_online.c b/dm/host/hle_smm2_online.c
+index e53685e8..e1b8ff2a 100644
+--- a/dm/host/hle_smm2_online.c
++++ b/dm/host/hle_smm2_online.c
+@@ -10,8 +10,8 @@
+ //
+ // What it covers: Course World's login (no NEX connection), the course lists (Hot, Popular, New, Detailed Search, a maker's courses),
+ // search by course ID, the makers on the lists, course downloads (play from the course page, Download to the Coursebot) and the
+-// course pictures. Not covered (the game's own code answers "not connected"): the Endless Challenge, Super Worlds, uploads, comments,
+-// leaderboards, Ninji Speedruns, multiplayer.
++// course pictures, and the Endless Challenge on the game's own rules and screens (nxkit 0027). Not covered (the game's own code answers "not connected"): the Endless
++// Challenge's rankings screen, Super Worlds, uploads, comments, leaderboards, Ninji Speedruns, multiplayer.
+ //
+ // Settings (Documents/env.txt): DM_SMM2_ONLINE=0 turns it off (the game is offline again); DM_SMM2_SERVER=<ip>:<port> and
+ // DM_SMM2_TOKEN=<token> use a course server elsewhere instead of the one in the app; DM_SMM2_LOG=1 logs every request.
+@@ -547,6 +547,7 @@ static int server_thumbnail(uint64_t id, uint64_t dst, int wait_ms) {   // 1: th
+ 
+ // ---- the wrappers
+ #define USE(x) (void)(x)
++static const char *const ENDLESS_DIFF[4] = {"easy", "normal", "expert", "super_expert"};
+ static void w_login_ready(uint64_t *regs) {   // enl session cLogInReady: logged in at once, no NEX login
+     uint64_t self = regs[0];
+     s8(self + 0x19, 1); s8(self + 0x1a, 0);
+@@ -565,6 +566,7 @@ static void w_login(uint64_t *regs) {   // cLogIn, the logged-in resting state:
+ static void w_own_user(uint64_t *regs) {   // GetUsers for the player: their record, a registered user with a Mii
+     uint64_t no = regs[0];
+     own_maker_id();
++    J *es = srv_json("GET", "/api/endless", NULL, 10000, NULL);   // (the High Score slots of the Endless menu)
+     lock(no);
+     s64(no + RING_USERS + 0xc, 0);
+     if (g32(no + RING_USERS + 8) > 0 && g64(no + RING_USERS)) {
+@@ -578,9 +580,11 @@ static void w_own_user(uint64_t *regs) {   // GetUsers for the player: their rec
+         default_mii(e + 0x9c, g_nick);
+         s32(e + 0x190, 0); s32(e + 0x194, 100);
+         s8(e + 0x1ec, 1);
++        for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, (uint32_t)jnum(jget(jget(es, "best"), ENDLESS_DIFF[d]), 0));
+         s32(no + RING_USERS + 0x10, 1);
+     }
+     unlock(no);
++    jfree(es);
+     // The Maker avatar: a name and a Mii in the save when it has none (else Course World sends the player to the console's Mii editor)
+     uint64_t set = g64(M(G_SETTINGS));
+     if (set && g64(set + 0x2b0) && *(volatile uint16_t *)(uintptr_t)g64(set + 0x2b0) == 0) { put16(g64(set + 0x2b0), 11, g_nick); LOG("smm2 online: Maker avatar named %s", g_nick); }
+@@ -595,8 +599,10 @@ static J *maker_get(const char *id) {   // GET /api/makers/<XXX-XXX-XXX>
+     return srv_json("GET", path, NULL, 10000, NULL);
+ }
+ 
+-static void w_search(uint64_t *regs) {   // SearchCourses: Course World's lists (type at +0x746e8; 14 is the Endless Challenge, not served)
++static void w_endless_search(uint64_t *regs);
++static void w_search(uint64_t *regs) {   // SearchCourses: Course World's lists (type at +0x746e8; 14 is the Endless Challenge)
+     uint64_t no = regs[0];
++    if (g32(no + 0x746e8) == 14) { w_endless_search(regs); return; }
+     uint32_t type = g32(no + 0x746e8), page = g32(no + 0x737a8), band = 4, style = 5;
+     const char *sort = "popular", *list_kind = NULL;
+     int by_maker = 0, none = 0;
+@@ -610,7 +616,7 @@ static void w_search(uint64_t *regs) {   // SearchCourses: Course World's lists
+     case 6: case 8: case 9: by_maker = 1; break;   // a maker's courses, world records, first clears
+     case 7: list_kind = "liked"; break;
+     case 10: list_kind = "played"; break;
+-    default: none = 1; break;   // followed makers, versus, the Endless Challenge
++    default: none = 1; break;   // followed makers, versus
+     }
+     if (by_maker || list_kind) maker_of(g64(no + 0x746f0), id, name);
+     J *j = NULL;
+@@ -830,8 +836,8 @@ static void w_comments(uint64_t *regs) {   // SearchComments (while a course pla
+ }
+ // Answers with nothing to fetch: a few writes under the lock, then success
+ #define TRIVIAL(name, body) static void name(uint64_t *regs) { uint64_t no = regs[0]; lock(no); body; unlock(no); finish(regs, no, 1, 0); }
+-TRIVIAL(w_ok, USE(no))                                                           // LoginCheck, UpdateLastLoginInfo, PostActivityQuest, SyncUserProfile, ReportFromBugDetection
+-TRIVIAL(w_app_config, for (int i = 0; i < 38; i++) s32(no + 0x737b0 + 4 * i, 0)) // GetApplicationConfig: nothing switched on (no Endless Challenge, no Super Worlds)
++TRIVIAL(w_ok, USE(no))                                                           // LoginCheck, UpdateLastLoginInfo, PostActivityQuest, SyncUserProfile
++TRIVIAL(w_app_config, for (int i = 0; i < 38; i++) s32(no + 0x737b0 + 4 * i, i < 4)) // GetApplicationConfig: values 0-3 switch the Endless Challenge on per difficulty; the rest stay off (no Super Worlds)
+ TRIVIAL(w_name_ok, s32(no + 0x141608, 0))                                        // GetUserNameNgType: the name is fine
+ TRIVIAL(w_no_clothes, s32(no + 0x73a58, 0))                                      // GetMiiClothes: no costume rewards
+ TRIVIAL(w_no_news, s8(no + 0xeac12, 0); s8(no + 0xeac14, 0))                     // GetNewNotification
+@@ -841,6 +847,190 @@ TRIVIAL(w_no_event_list, s64(no + 0x14161c, 0))
+ TRIVIAL(w_course_info, s64(no + 0xe85ac, 0))                                     // records about a course around its start: none
+ TRIVIAL(w_id_check, s32(no + 0x141604, 0))                                       // a check on an id: passes
+ 
++// ---- The Endless Challenge (nxkit 0027). The game's own screens and rules; the run lives on the course server in the app (its /api/endless routes). The fields of the session object, the run
++// records and the order of the requests are smm2recomp's findings for 3.0.3 (recomp/games/smm2/mods/endless.c)
++#define E_REC_COUNT 0xe9970   // the run records: one per difficulty, 0x38 bytes each
++#define E_RECORDS 0xe9978
++#define E_HISTORY 0xe9980     // the map's dots, per difficulty (stride 0x498): entries (0x18 bytes each), +8 capacity, +0xc head, +0x10 count
++#define E_DIFF 0xeabe0        // the difficulty of a request
++#define E_CLEAR_ID 0xeabe8    // a clear: course id, +0xeabf4 pending 1-Ups, +0xeabf5 coins, +0xeabf8 score with the time bonus
++#define E_RANK 0xeac00
++#define E_COURSE_ID 0xeac08   // a start or a skip: course id
++#define G_ENDLESS_RUN 0x2c56bb0   // the run on screen: +0x30 current counters, +0x40 those at the course's start (lives at *(+8), one per player), +0x48 "skipped during a miss"
++static struct { uint32_t coins, score; uint64_t started; } g_erun[4];   // what the server holds (a clear reports differences), and the course started with no result yet
++static pthread_mutex_t g_erun_mu = PTHREAD_MUTEX_INITIALIZER;
++static int g_esearch = -1;
++static uint32_t e_diff(uint64_t no, uint64_t field) { uint32_t d = g32(no + field); return d < 4 ? d : 0; }
++static uint64_t e_record(uint64_t no, uint32_t d) { return g64(no + E_RECORDS) + 0x38ull * (d < g32(no + E_REC_COUNT) ? d : 0); }
++static uint32_t e_style(const char *s) { for (uint32_t i = 0; i < 5; i++) if (!strcmp(s, STYLES[i])) return i; return 0; }
++static void e_play(uint64_t no, uint32_t d, J *j) {   // the server's lives and clears into the run record
++    uint32_t lives = (uint32_t)jnum(jget(j, "lives"), 0), clears = (uint32_t)jnum(jget(j, "clears"), 0);
++    lock(no);
++    uint64_t r = e_record(no, d);
++    s8(r + 0x28, 1); s32(r + 0x2c, clears); s8(r + 0x30, (uint8_t)(lives > 255 ? 255 : lives));
++    unlock(no);
++}
++// A result the server refuses because the course isn't the run's: the run as the server has it goes on, the game's next search gets its next course
++static J *e_result(uint32_t d, const char *code, const char *body) {
++    char path[64]; int st = 0;
++    snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=smm2", ENDLESS_DIFF[d]);
++    J *j = srv_json("POST", path, body, 10000, &st);
++    if (j || st != 400) return j;
++    J *all = srv_json("GET", "/api/endless", NULL, 10000, NULL), *run = jget(jget(all, "runs"), ENDLESS_DIFF[d]);
++    if (!run || !jnum(jget(run, "active"), 0)) { jfree(all); return NULL; }
++    char again[64]; int n = snprintf(again, sizeof again, "{\"lives\":%u,\"clears\":%u}", (uint32_t)jnum(jget(run, "lives"), 0), (uint32_t)jnum(jget(run, "clears"), 0));
++    LOG("smm2 online: Endless result for %s refused, going on with the server's run %s", code, again);
++    jfree(all);
++    return jparse(again, (size_t)n);
++}
++static void w_endless_status(uint64_t *regs) {   // GetEndlessModeStatus: the four run records; state +4 = 1 lets the menu offer Continue, +0x11 the lives New Game starts with
++    uint64_t no = regs[0];
++    J *st = srv_json("GET", "/api/endless", NULL, 10000, NULL);
++    if (!st) { finish(regs, no, 0, 2); return; }
++    pthread_mutex_lock(&g_erun_mu);
++    lock(no);
++    for (uint32_t d = 0; d < 4 && d < g32(no + E_REC_COUNT); d++) {
++        J *run = jget(jget(st, "runs"), ENDLESS_DIFF[d]);
++        uint32_t lives = (uint32_t)jnum(jget(run, "lives"), 0), clears = (uint32_t)jnum(jget(run, "clears"), 0), coins = (uint32_t)jnum(jget(run, "coins"), 0), score = (uint32_t)jnum(jget(run, "score"), 0);
++        int cont = jnum(jget(run, "active"), 0) && lives && !jnum(jget(run, "complete"), 0);
++        uint8_t lv = (uint8_t)(lives > 255 ? 255 : lives);
++        uint64_t r = e_record(no, d);
++        s8(r, 1); s32(r + 4, cont); s8(r + 8, cont ? (uint8_t)(coins % 100) : 0); s32(r + 0xc, cont ? score : 0);
++        s8(r + 0x10, cont ? lv : 0); s8(r + 0x11, 5); s64(r + 0x18, 0); s64(r + 0x20, 0);
++        s8(r + 0x28, (uint8_t)cont); s32(r + 0x2c, cont ? clears : 0); s8(r + 0x30, cont ? lv : 0);
++        g_erun[d].coins = coins; g_erun[d].score = score;
++    }
++    unlock(no);
++    pthread_mutex_unlock(&g_erun_mu);
++    jfree(st);
++    finish(regs, no, 1, 0);
++}
++static void w_endless_new(uint64_t *regs) {   // InitEndlessMode: New Game
++    uint64_t no = regs[0]; uint32_t d = e_diff(no, E_DIFF);
++    char path[64]; snprintf(path, sizeof path, "/api/endless/%s/start?ruleset=smm2", ENDLESS_DIFF[d]);
++    J *j = srv_json("POST", path, "{\"ruleset\":\"smm2\"}", 10000, NULL);
++    if (j) { pthread_mutex_lock(&g_erun_mu); memset(&g_erun[d], 0, sizeof g_erun[d]); pthread_mutex_unlock(&g_erun_mu); }
++    LOG("smm2 online: Endless New Game (%s): %s", ENDLESS_DIFF[d], j ? "started" : "the server refused");
++    int ok = j != NULL; jfree(j);
++    finish(regs, no, ok, 2);
++}
++static void w_endless_history(uint64_t *regs) {   // GetEndlessModePlayInfo: the map's dots, from each difficulty's history (no run there: 404, an empty map)
++    uint64_t no = regs[0]; J *h[4];
++    for (int d = 0; d < 4; d++) { char path[64]; snprintf(path, sizeof path, "/api/endless/%s/history?ruleset=smm2", ENDLESS_DIFF[d]); h[d] = srv_json("GET", path, NULL, 10000, NULL); }
++    lock(no);
++    for (int d = 0; d < 4; d++) {
++        uint64_t ring = no + E_HISTORY + 0x498ull * (uint64_t)d, entries = g64(ring);
++        uint32_t cap = g32(ring + 8), count = 0;
++        s64(ring + 0xc, 0);
++        J *list = jget(h[d], "history");
++        int n = jlen(list);
++        for (int i = n > (int)cap ? n - (int)cap : 0; i < n && entries; i++) {
++            J *e = jat(list, i); uint32_t id;
++            if (!id_of(jstr(jget(e, "code"), ""), &id)) continue;
++            uint64_t p = entries + 0x18ull * count++;
++            s64(p, id); s32(p + 8, strcmp(jstr(jget(e, "result"), ""), "clear") != 0);   // 0 a clear, 1 a skip
++            s32(p + 0xc, (uint32_t)jnum(jget(e, "seq"), 0));
++            s8(p + 0x10, (uint8_t)e_style(jstr(jget(e, "style"), ""))); s8(p + 0x11, (uint8_t)jnum(jget(e, "theme"), 0));
++        }
++        s32(ring + 0x10, count);
++    }
++    unlock(no);
++    for (int d = 0; d < 4; d++) jfree(h[d]);
++    finish(regs, no, 1, 0);
++}
++static void w_endless_rank(uint64_t *regs) {   // GetEndlessModeRank: the player's place on this phone's board
++    uint64_t no = regs[0]; uint32_t d = e_diff(no, E_DIFF);
++    char path[64]; snprintf(path, sizeof path, "/api/rankings/endless_%s?limit=1", ENDLESS_DIFF[d]);
++    J *j = srv_json("GET", path, NULL, 10000, NULL);
++    uint32_t rank = (uint32_t)jnum(jget(jget(j, "me"), "rank"), 0);
++    jfree(j);
++    lock(no); s32(no + E_RANK, rank ? rank : 0xffffffffu); unlock(no);
++    finish(regs, no, 1, 0);
++}
++static void w_endless_search(uint64_t *regs) {   // SearchCourses type 14: the run's next courses. The first batch of a difficulty is gathered from TGRCode, about a minute (this is the game's network thread, it waits)
++    uint64_t no = regs[0]; uint32_t d = e_diff(no, 0x746ec);
++    char path[64]; snprintf(path, sizeof path, "/api/endless/%s/next?count=10&ruleset=smm2", ENDLESS_DIFF[d]);
++    J *j = srv_json("GET", path, NULL, 180000, NULL);
++    if (!j) { LOG("smm2 online: Endless course list (%s): no answer", ENDLESS_DIFF[d]); finish(regs, no, 0, 2); return; }
++    lock(no);
++    uint32_t n = courses_into_ring(no, jget(j, "courses"), 4, NULL, NULL);
++    for (uint32_t i = 0; i < n; i++) s32(g64(no + RING_COURSES) + (uint64_t)COURSE_ENTRY * i + 0x180, d);
++    s8(no + 0x737ac, 0);
++    unlock(no);
++    pthread_mutex_lock(&g_erun_mu); g_esearch = (int)d; pthread_mutex_unlock(&g_erun_mu);
++    LOG("smm2 online: Endless course list (%s): %u courses", ENDLESS_DIFF[d], n);
++    jfree(j);
++    finish(regs, no, n > 0, 2);
++}
++static void w_endless_start(uint64_t *regs) {   // StartEndlessModeCourse: posted when a course starts, and again during a miss (the life it costs)
++    uint64_t no = regs[0], id = g64(no + E_COURSE_ID); uint32_t d = e_diff(no, E_DIFF);
++    char code[12], body[96]; code_of((uint32_t)id, code);
++    pthread_mutex_lock(&g_erun_mu); int miss = id && g_erun[d].started == id; g_erun[d].started = id; pthread_mutex_unlock(&g_erun_mu);
++    J *j;
++    if (!miss) { J *all = srv_json("GET", "/api/endless", NULL, 10000, NULL), *run = jget(jget(all, "runs"), ENDLESS_DIFF[d]); if (run) e_play(no, d, run); LOG("smm2 online: Endless course %s (%s), %d lives", code, ENDLESS_DIFF[d], (int)jnum(jget(run, "lives"), -1)); int ok = run != NULL; jfree(all); finish(regs, no, ok, 2); return; }
++    snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"death\"}", code);
++    j = e_result(d, code, body);
++    if (j) { e_play(no, d, j); LOG("smm2 online: Endless miss on %s, %d lives%s", code, (int)jnum(jget(j, "lives"), -1), jnum(jget(j, "game_over"), 0) ? " (game over)" : ""); }
++    int ok = j != NULL; jfree(j);
++    finish(regs, no, ok, 2);
++}
++static void w_endless_clear(uint64_t *regs) {   // DominateEndlessModeCourse: a clear
++    uint64_t no = regs[0], id = g64(no + E_CLEAR_ID); uint32_t d = e_diff(no, E_DIFF), pending = g8(no + 0xeabf4), coins = g8(no + 0xeabf5), score = g32(no + 0xeabf8);
++    pthread_mutex_lock(&g_erun_mu);
++    uint32_t dcoins = (coins + 100 - g_erun[d].coins % 100) % 100, dscore = score >= g_erun[d].score ? score - g_erun[d].score : 0;   // (the game sends coins below 100)
++    pthread_mutex_unlock(&g_erun_mu);
++    char code[12], body[192]; code_of((uint32_t)id, code);
++    snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"clear\",\"pending\":%u,\"coins\":%u,\"score\":%u,\"frames_left\":0}", code, pending, dcoins, dscore);
++    J *j = e_result(d, code, body);
++    if (j) {
++        e_play(no, d, j);
++        pthread_mutex_lock(&g_erun_mu); g_erun[d].coins += dcoins; g_erun[d].score += dscore; g_erun[d].started = 0; pthread_mutex_unlock(&g_erun_mu);
++        LOG("smm2 online: Endless clear %s, %d lives, %d clears", code, (int)jnum(jget(j, "lives"), -1), (int)jnum(jget(j, "clears"), -1));
++    }
++    int ok = j != NULL; jfree(j);
++    finish(regs, no, ok, 2);
++}
++static void w_endless_skip(uint64_t *regs) {   // PassEndlessModeCourse: a skip. The game's course end puts its counters back to the course's start and takes a life if its own flag says so, so the server's lives go into both and the flag is cleared
++    uint64_t no = regs[0], id = g64(no + E_COURSE_ID); uint32_t d = e_diff(no, E_DIFF);
++    char code[12], body[96]; code_of((uint32_t)id, code);
++    snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"skip\",\"during_miss\":false}", code);
++    J *j = e_result(d, code, body);
++    if (j) {
++        uint32_t lives = (uint32_t)jnum(jget(j, "lives"), 0);
++        e_play(no, d, j);
++        uint64_t run = g64(M(G_ENDLESS_RUN));
++        if (run >= 0x7000000000ull) {
++            for (int k = 0; k < 2; k++) { uint64_t ct = g64(run + (k ? 0x40 : 0x30)), lp = ct >= 0x7000000000ull ? g64(ct + 8) : 0; if (lp >= 0x7000000000ull) for (int i = 0; i < 4; i++) s32(lp + 4 * i, lives); }
++            s8(run + 0x48, 0);
++        }
++        pthread_mutex_lock(&g_erun_mu); g_erun[d].started = 0; pthread_mutex_unlock(&g_erun_mu);
++        LOG("smm2 online: Endless skip %s, %u lives", code, lives);
++    }
++    int ok = j != NULL; jfree(j);
++    finish(regs, no, ok, 2);
++}
++static void e_simple(uint64_t *regs, const char *what) {
++    uint64_t no = regs[0]; uint32_t d = e_diff(no, E_DIFF);
++    char path[64]; snprintf(path, sizeof path, "/api/endless/%s/%s?ruleset=smm2", ENDLESS_DIFF[d], what);
++    J *j = srv_json("POST", path, "{}", 10000, NULL);
++    pthread_mutex_lock(&g_erun_mu); g_erun[d].started = 0; pthread_mutex_unlock(&g_erun_mu);
++    LOG("smm2 online: Endless %s (%s)%s", what, ENDLESS_DIFF[d], j ? "" : ": the server refused");
++    int ok = j != NULL; jfree(j);
++    finish(regs, no, ok, 2);
++}
++static void w_endless_suspend(uint64_t *regs) { e_simple(regs, "suspend"); }   // SuspendEndlessMode: quit, the run is kept
++static void w_endless_finish(uint64_t *regs) { e_simple(regs, "finish"); }     // FinishEndlessMode: game over
++static void w_course_broken(uint64_t *regs) {   // ReportFromBugDetection: the game found a downloaded course corrupt. In a run it leaves the server's queue, or the next search would hand it out again
++    uint64_t no = regs[0], id = g64(no + 0x141480);
++    int d = -1;
++    pthread_mutex_lock(&g_erun_mu);
++    for (int i = 0; i < 4 && d < 0; i++) if (id && g_erun[i].started == id) d = i;
++    if (d < 0) d = g_esearch;
++    pthread_mutex_unlock(&g_erun_mu);
++    if (d >= 0) { char code[12], body[96]; code_of((uint32_t)id, code); snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"broken\"}", code); jfree(e_result((uint32_t)d, code, body)); LOG("smm2 online: course %s reported corrupt by the game, out of the Endless run", code); }
++    finish(regs, no, 1, 0);
++}
++
+ static const struct { uint32_t off; void (*fn)(uint64_t *); const char *what; } k_wrappers[] = {
+     {0x60fe20, w_login_ready, "cLogInReady"}, {0x6101d0, w_login, "cLogIn"},
+     {0x14ce2f0, w_app_config, "GetApplicationConfig"}, {0x14d5cd0, w_own_user, "GetUsers (own)"}, {0x14f2cc0, w_name_ok, "GetUserNameNgType"},
+@@ -852,7 +1042,10 @@ static const struct { uint32_t off; void (*fn)(uint64_t *); const char *what; }
+     {0x14dbae0, w_courses_by_id, "GetCourses"}, {0x14de010, w_course_file, "GetObject (course)"}, {0x14e0e70, w_thumbnails, "pictures"},
+     {0x14ec0d0, w_course_info, "course records"}, {0x14f17a0, w_id_check, "id check"}, {0x14e8ec0, w_comments, "SearchComments"},
+     {0x14e30e0, w_play_result, "PostPlayResult"}, {0x14ebc60, w_can_rate, "CanPostRatingAndComment"}, {0x14e6b90, w_rate, "PostRatingInfo"},
+-    {0x14f2910, w_ok, "ReportFromBugDetection"},
++    {0x14f2910, w_course_broken, "ReportFromBugDetection"},
++    {0x14ec2d0, w_endless_status, "GetEndlessModeStatus"}, {0x14ece20, w_endless_new, "InitEndlessMode"}, {0x14ed750, w_endless_history, "GetEndlessModePlayInfo"},
++    {0x14eddc0, w_endless_rank, "GetEndlessModeRank"}, {0x14ecf30, w_endless_start, "StartEndlessModeCourse"}, {0x14ed120, w_endless_clear, "DominateEndlessModeCourse"},
++    {0x14ed5e0, w_endless_skip, "PassEndlessModeCourse"}, {0x14ed360, w_endless_suspend, "SuspendEndlessMode"}, {0x14ed4a0, w_endless_finish, "FinishEndlessMode"},
+ };
+ 
+ static void init(void) {
