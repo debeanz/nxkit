@@ -87,6 +87,8 @@ General, every game:
 - **3D textures in 2D slots**: a shader that reads a 3D texture through a 2D slot (on the Switch: its first depth plane;
   on Metal an undefined read) gets a 2D copy of that plane, refreshed each submission. Kirby's menus, HUD and text
   multiply in such a texture and parts of them were invisible.
+- **Sound in silent mode**: the app's audio session is Playback instead of SoloAmbient, so games are heard with the
+  Ring / Silent switch on silent. `DM_AUDIO_SILENT_SWITCH=1` in `env.txt` follows the switch again.
 
 Kirby and the Forgotten Land (`patches/01004D300C5AE000`, testing):
 

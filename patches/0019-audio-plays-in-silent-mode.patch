@@ -1,0 +1,17 @@
+diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
+index 54f01dfd..564307e3 100644
+--- a/dm/ios/Sources/front_ios.m
++++ b/dm/ios/Sources/front_ios.m
+@@ -247,7 +247,11 @@ void front_save_failed(int err) {
+ static int g_session_off;   // the last activation failed (another app or a call still held the session): tried again when the app becomes active
+ void front_ios_audio_session(void) {
+     AVAudioSession *s = AVAudioSession.sharedInstance; NSError *e = nil;
+-    if (![s setCategory:AVAudioSessionCategorySoloAmbient error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
++    // Playback: the game is heard with the Ring / Silent switch on silent, as games are on a Switch (SoloAmbient followed the switch: no sound in silent mode).
++    // DM_AUDIO_SILENT_SWITCH=1 in Documents/env.txt follows the switch again
++    const char *sw = getenv("DM_AUDIO_SILENT_SWITCH"); int follow = sw && atoi(sw);
++    if (![s setCategory:follow ? AVAudioSessionCategorySoloAmbient : AVAudioSessionCategoryPlayback error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
++    LOG("audio session: %s", follow ? "follows the silent switch (DM_AUDIO_SILENT_SWITCH=1)" : "plays in silent mode");
+     [s setPreferredSampleRate:48000 error:nil];
+     if (![s setPreferredIOBufferDuration:0.005 error:&e]) LOG("[RED] audio session I/O buffer duration could not be set: %s", e.localizedDescription.UTF8String);
+     g_session_off = ![s setActive:YES error:&e];
