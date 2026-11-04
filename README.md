@@ -92,6 +92,11 @@ General, every game:
 - **Command list targets that are no list are skipped** (0022): a JUMP / CALL record (or a submitted handle) pointing below 64 KB
   or with high address bits set is logged and skipped instead of crashing the Metal replay. Super Mario Maker 2 crashed there
   (`CRASH sig=11 addr=0x1 pc=mtl_exec+0x158`) soon after its command memory first overflowed into a host-lent segment.
+- **System data from the app** (0023): a system data archive in the app as `dm/sysdata/<id>` is mounted in place of the
+  host's stand-in. `py nxkit.py sysdata <game folder> <firmware .nca folder> -k prod.keys --hactool <hactool.exe>` takes
+  MiiModel (0100000000000802) from your own firmware dump into `<title ID>_build/sysdata`, and the next `game` / `rebuild`
+  puts it into the IPA (nothing of it goes to GitHub). Super Mario Maker 2's Course World draws Maker avatars from it and
+  crashed on the stand-in (a null `MiiCharModelTexture`).
 - **App life cycle and memory in the log** (iOS): the app going inactive, to the background and back, iOS's memory
   warnings and memory pressure (with the footprint iOS counts and what is left before the limit). iOS can end an app in
   the background or over its memory limit without a crash report; the log then shows what came last.

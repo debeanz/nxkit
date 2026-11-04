@@ -1,0 +1,23 @@
+diff --git a/dm/host/hle_fs.c b/dm/host/hle_fs.c
+index 81bb359b..d4a15ad6 100644
+--- a/dm/host/hle_fs.c
++++ b/dm/host/hle_fs.c
+@@ -373,6 +373,18 @@ HLE_FORCE("_ZN2nn2fs17MountAddOnContentEPKciPvm", "fsp-srv; add-on content → D
+ int dm_mii_standin(const char *dir);
+ static int sysdata_dir(char *dir, size_t n, uint64_t id) {
+     char t[1024];
++    // (nxkit 0023) The app's own copy first: dm/sysdata/<id> beside dm/font (DM_FONT_DIR), the archive's RomFS from the player's own firmware, which nxkit merges into the IPA
++    // (nxkit.py sysdata). Super Mario Maker 2's Course World builds its Maker avatars from MiiModel and crashed on the stand-in (a null MiiCharModelTexture, nvnTextureGetFlags)
++    const char *fd = getenv("DM_FONT_DIR");
++    if (fd && strlen(fd) < sizeof t) {
++        strlcpy(t, fd, sizeof t); char *s = strrchr(t, '/');
++        struct stat st; char probe[1200];
++        if (s && (*s = 0, snprintf(dir, n, "%s/sysdata/%016llx", t, (unsigned long long)id) < (int)n) &&
++            snprintf(probe, sizeof probe, "%s/%s", dir, id == SYSDATA_MIIMODEL ? "ShapeMid.dat" : ".") < (int)sizeof probe && stat(probe, &st) == 0) {
++            static int said; if (!said++) LOG("fs system data %016llx: the app's own copy %s (from the player's firmware)", (unsigned long long)id, dir);
++            return 1;
++        }
++    }
+     if (id != SYSDATA_MIIMODEL || snprintf(dir, n, "%s_sysdata/%016llx", envdir("DM_TEMP", "run/platform/temp", t, sizeof t), (unsigned long long)id) >= (int)n) return 0;
+     return dm_mii_standin(dir);
+ }

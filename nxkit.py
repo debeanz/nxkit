@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 NXNATIVE_REF = '2db12f7efdf2acf50026ec10f515193d67f2a3b6'   # the nxnative commit patches/ are made for: main moves several times a day and can break them (--nxnative-ref main: the newest)
 CONFIG = HERE / 'nxkit.local.json'     # home folder, repository and kit password (never committed: see .gitignore)
 APP = 'Payload/DmIOS.app/'             # the app folder inside the IPA (dm/ios/tools/build_ipa.sh)
+SYSDATA = APP + 'dm/sysdata/'          # system data archives from the player's own firmware (nxkit.py sysdata; the host's hle_fs.c mounts them, patch 0023)
 NEEDS_MAC = {   # what profile_guess.py shader_sources reports → why the build boots the game on a Mac
     'glslc_capture': 'it compiles shaders at run time, which the build captures by booting the game on a Mac GPU',
     'vk_capture': 'it generates Vulkan shaders at run time, which the build captures by booting the game on a Mac',
@@ -383,7 +384,7 @@ def build(repo, kit_dir, out_ipa):
 
 
 # ---- PC: merge the slim IPA with the game files ----
-def merge(slim, romfs, aoc, store, out):
+def merge(slim, romfs, aoc, store, out, sysdata=None):
     """The slim IPA's entries (its stub RomFS left out), then the RomFS and the add-on content from the PC, as dm/ios/tools/pack_ipa.py packs them: Unix modes, names ending in
     a zip_store suffix stored, everything else deflated at level 6"""
     store = tuple(s.lower() for s in (store or '').split(':') if s)
@@ -413,13 +414,14 @@ def merge(slim, romfs, aoc, store, out):
 
     with zipfile.ZipFile(slim) as zin, zipfile.ZipFile(tmp, 'w', allowZip64=True) as z:
         for info in zin.infolist():
-            if info.filename.startswith((APP + 'romfs/', APP + 'aoc/')): continue
+            if info.filename.startswith((APP + 'romfs/', APP + 'aoc/', SYSDATA)): continue
             zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
             zi.create_system, zi.external_attr, zi.compress_type, zi.compress_level = info.create_system, info.external_attr, info.compress_type, 6
             if info.is_dir(): z.writestr(zi, b''); continue
             with zin.open(info) as f, z.open(zi, 'w', force_zip64=info.file_size >= 1 << 31) as o: shutil.copyfileobj(f, o, 16 << 20)
         add_tree(z, romfs, APP + 'romfs/')
         if aoc and Path(aoc).is_dir(): add_tree(z, aoc, APP + 'aoc/')
+        if sysdata and Path(sysdata).is_dir(): add_tree(z, sysdata, SYSDATA); say(f'system data from {sysdata}')
     tmp.replace(out)
     say(f'merged in {time.time() - t0:.0f} s: {out} ({out.stat().st_size / 2 ** 30:.2f} GB)')
 
@@ -441,7 +443,7 @@ def game_cmd(a):
     info = prepare(repo, commit, a.nsp_dir, a.keys, kit_zip, a.package, a.app_name, a.language, a.bundle_id, not a.no_fps)
     encrypt(kit_zip, kit_enc, cfg['password']); kit_zip.unlink()
     say(f'encrypted build kit: {kit_enc.stat().st_size / 2 ** 20:.0f} MB')
-    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge(slim, info['romfs'], info['aoc'], info['zip_store'], a.out or info['ipa']))
+    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge(slim, info['romfs'], info['aoc'], info['zip_store'], a.out or info['ipa'], Path(info['work']) / 'sysdata'))
     say(f'done: {a.out or info["ipa"]}')
     if not a.keep_extracted:
         say(f'deleting the extracted game files: {Path(info["work"]) / "extract"}'); B_rm(Path(info['work']) / 'extract')
@@ -497,7 +499,7 @@ def cloud_ipa(cfg, home, kit_enc, tag, commit, finish):
         kit_enc.unlink(missing_ok=True)
 
 
-def merge_from_ipa(slim, old, store, out):
+def merge_from_ipa(slim, old, store, out, sysdata=None):
     """As merge, with the RomFS and add-on content taken from an earlier IPA of the same game (its NSPs gone): the slim IPA's entries, then the old IPA's romfs/ and aoc/ entries"""
     store = tuple(s.lower() for s in (store or '').split(':') if s)
     out = Path(out); tmp = out.with_name(out.name + '.partial')
@@ -511,14 +513,24 @@ def merge_from_ipa(slim, old, store, out):
         with zin.open(info) as f, z.open(zi, 'w', force_zip64=info.file_size >= 1 << 31) as o: shutil.copyfileobj(f, o, 16 << 20)
 
     with zipfile.ZipFile(slim) as zs, zipfile.ZipFile(old) as zo, zipfile.ZipFile(tmp, 'w', allowZip64=True) as z:
-        game = [i for i in zo.infolist() if i.filename.startswith((APP + 'romfs/', APP + 'aoc/'))]
+        disk = sysdata and Path(sysdata).is_dir()
+        keep = (APP + 'romfs/', APP + 'aoc/') + (() if disk else (SYSDATA,))
+        game = [i for i in zo.infolist() if i.filename.startswith(keep)]
         if not any(i.filename.startswith(APP + 'romfs/') and not i.is_dir() for i in game): raise KitError(f'{old} holds no game files ({APP}romfs/)')
         total = sum(i.file_size for i in game)
         for info in zs.infolist():
-            if not info.filename.startswith((APP + 'romfs/', APP + 'aoc/')): copy(zs, info, z)
+            if not info.filename.startswith((APP + 'romfs/', APP + 'aoc/', SYSDATA)): copy(zs, info, z)
         for info in game:
             copy(zo, info, z); done += info.file_size
             if time.time() - shown > 10: shown = time.time(); say(f'merge: {done / 2 ** 30:.1f} of {total / 2 ** 30:.1f} GB')
+        if disk:
+            root = Path(sysdata)
+            for f in sorted(root.rglob('*')):
+                if not f.is_file(): continue
+                zi = zipfile.ZipInfo(SYSDATA + f.relative_to(root).as_posix(), date_time=dos_time(f))
+                zi.create_system, zi.external_attr, zi.compress_type, zi.compress_level = 3, 0o100644 << 16, zipfile.ZIP_DEFLATED, 6
+                with open(f, 'rb') as fi, z.open(zi, 'w') as o: shutil.copyfileobj(fi, o, 16 << 20)
+            say(f'system data from {root}')
     tmp.replace(out)
     say(f'merged in {time.time() - t0:.0f} s: {out} ({out.stat().st_size / 2 ** 30:.2f} GB)')
 
@@ -568,8 +580,36 @@ def rebuild_cmd(a):
     encrypt(kit_zip, kit_enc, cfg['password']); kit_zip.unlink()
     say(f'encrypted build kit: {kit_enc.stat().st_size / 2 ** 20:.0f} MB')
     out = Path(a.out).resolve() if a.out else old
-    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge_from_ipa(slim, old, info['zip_store'], out))
+    cloud_ipa(cfg, home, kit_enc, tag, commit, lambda slim: merge_from_ipa(slim, old, info['zip_store'], out, work / 'sysdata'))
     say(f'done: {out}')
+
+
+SYSDATA_IDS = {0x0100000000000802: 'MiiModel'}   # what a game can need: MiiModel draws Mii heads (Super Mario Maker 2's Course World crashed on the host's stand-in)
+
+
+def sysdata_cmd(a):
+    """System data archives from the player's own firmware dump (a folder of its .nca files) into <title ID>_build/sysdata/<id>, which game / rebuild put into the IPA as
+    dm/sysdata/<id> (the host mounts them in place of its stand-ins, patch 0023). Uses hactool (its RomFS extraction) with prod.keys; the keys must open that firmware"""
+    folder = Path(a.nsp_dir).resolve()
+    found = sorted(folder.glob('*_build/nxkit.json'))
+    if not found: raise KitError(f'no earlier build in {folder} (<title ID>_build/nxkit.json): build the game first')
+    work, fw, hac = found[0].parent, Path(a.firmware).resolve(), Path(a.hactool).resolve()
+    if not hac.is_file(): raise KitError(f'no hactool at {hac} (--hactool)')
+    want = dict(SYSDATA_IDS)
+    for nca in sorted(fw.rglob('*.nca')):
+        if not want: break
+        if nca.stat().st_size > 64 << 20: continue   # (system data archives are small; the large NCAs are the system's programs)
+        r = subprocess.run([hac, '-k', a.keys, '-i', nca], capture_output=True, text=True, errors='replace')
+        m = re.search(r'Title ID:\s+([0-9a-fA-F]{16})', r.stdout)
+        tid = int(m.group(1), 16) if m else None
+        if tid not in want: continue
+        out = work / 'sysdata' / f'{tid:016x}'; B_rm(out); out.mkdir(parents=True)
+        r = subprocess.run([hac, '-k', a.keys, f'--romfsdir={out}', nca], capture_output=True, text=True, errors='replace')
+        files = [f for f in out.rglob('*') if f.is_file()]
+        if r.returncode or not files: raise KitError(f'hactool could not unpack {nca.name} ({want[tid]}): {(r.stderr or r.stdout).strip()[-300:]}')
+        say(f'{want.pop(tid)} ({tid:016x}): {len(files)} files, {sum(f.stat().st_size for f in files) >> 10} KB from {nca.name} -> {out}')
+    for tid, name in want.items(): say(f'[RED] no {name} ({tid:016x}) in {fw}, or the keys do not open its NCA')
+    say('now build the IPA again (rebuild): the system data goes into it')
 
 
 def fetch_logs(slug, run_id, dst, password):
@@ -634,6 +674,9 @@ def main(argv=None):
     s.add_argument('nsp_dir', help='the game\'s folder (with <title ID>_build from the last build)')
     s.add_argument('--ipa', help='the IPA to take the game files from (default: the last build\'s)'); s.add_argument('-o', '--out', help='output IPA (default: replaces that IPA)')
     s.add_argument('--nxnative-ref', help='nxnative commit or branch (default: the commit the patches are made for; main: the newest)')
+    s = sub.add_parser('sysdata', help='system data (MiiModel) from your own firmware dump into the game\'s IPA')
+    s.add_argument('nsp_dir', help='the game\'s folder (with <title ID>_build from a build)'); s.add_argument('firmware', help='folder of your firmware dump\'s .nca files')
+    s.add_argument('-k', '--keys', required=True, help='prod.keys that open that firmware'); s.add_argument('--hactool', required=True, help='path of hactool')
     s = sub.add_parser('prepare', help='PC step: the build kit (unencrypted zip)')
     s.add_argument('repo'); s.add_argument('nsp_dir'); s.add_argument('-k', '--keys', required=True); s.add_argument('-o', '--out', required=True)
     s.add_argument('-p', '--package'); s.add_argument('--app-name'); s.add_argument('--bundle-id'); s.add_argument('-l', '--language')
@@ -649,6 +692,7 @@ def main(argv=None):
         if a.cmd == 'setup': setup_cmd(a)
         elif a.cmd == 'game': game_cmd(a)
         elif a.cmd == 'rebuild': rebuild_cmd(a)
+        elif a.cmd == 'sysdata': sysdata_cmd(a)
         elif a.cmd == 'prepare':
             repo = Path(a.repo).resolve()
             commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
