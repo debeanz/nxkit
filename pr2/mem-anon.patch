@@ -1,8 +1,8 @@
 diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
-index 8e16fc3..ad8351e 100644
+index 8e16fc3..447a43d 100644
 --- a/dm/host/hle_svc.c
 +++ b/dm/host/hle_svc.c
-@@ -66,6 +66,87 @@ static int mem_file_open(size_t size) {
+@@ -66,6 +66,96 @@ static int mem_file_open(size_t size) {
      LOG("guest memory: a shared mapping of an unlinked file in %s (%llu MB free there): out of the footprint, paged to the file under memory pressure", dir, (unsigned long long)(avail >> 20));
      return fd;
  }
@@ -41,6 +41,15 @@ index 8e16fc3..ad8351e 100644
 +    }
 +    *end = nx; return 0;
 +}
++// nxkit (tex-cap.patch, nvn_dirty.c): this address is one of the file's; a hole in the file over a range of its pages
++int dm_guest_in_file(uintptr_t a) { uintptr_t e; return g_memfd >= 0 && g_as && a >= (uintptr_t)g_as && a - (uintptr_t)g_as < g_reserve && !guest_anon_at(a, &e); }
++int dm_guest_punch(uintptr_t a, size_t n) {
++    fpunchhole_t ph = {0, 0, (off_t)(a - (uintptr_t)g_as), (off_t)n};
++    if (!fcntl(g_memfd, F_PUNCHHOLE, &ph)) return 1;
++    static _Atomic int nred; if (atomic_fetch_add(&nred, 1) < 8) LOG("[RED] guest memory %#lx+%#lx: no hole punched (errno %d): it keeps its bytes", (unsigned long)a, (unsigned long)n, errno);
++    return 0;
++}
++__attribute__((weak)) uint64_t nvn_dirty_released(void) { return 0; }
 +// nxkit (mem-anon.patch): every 10 s, what is resident of the guest block (mincore) and how much the system pages: the log line "[mem] watch". DM_MEM_WATCH=0 turns it off
 +static double g_t0;
 +static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_UPTIME_RAW, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
@@ -76,10 +85,10 @@ index 8e16fc3..ad8351e 100644
 +        uint64_t pi = (uint64_t)te.pageins, fa = (uint64_t)te.faults, po = vs.pageouts, dc = vs.decompressions;
 +        char hl[160]; int k = 0; size_t nb = (g_heap_cap + (1u << 30) - 1) >> 30; if (nb > NB) nb = NB;
 +        for (size_t b = 0; b < nb && k < (int)sizeof hl - 8; b++) k += snprintf(hl + k, sizeof hl - k, "%s%llu", b ? " " : "", (unsigned long long)(hb[b] >> 20));
-+        LOG("[mem] watch (%.0f s): page-ins %s%llu, faults %s%llu in 10 s; footprint %llu MB (compressed %llu), file pages resident %llu MB; system: free %llu MB, file cache %llu MB, compressor %llu MB, page-outs +%llu, decompressions +%llu; "
++        LOG("[mem] watch (%.0f s): page-ins %s%llu, faults %s%llu in 10 s; footprint %llu MB (compressed %llu), file pages resident %llu MB, texture storage given back %llu MB; system: free %llu MB, file cache %llu MB, compressor %llu MB, page-outs +%llu, decompressions +%llu; "
 +            "guest resident: anonymous parts %llu MB, file %llu MB, referenced %llu MB; alias %llu MB, stack %llu MB, heap by GB [%s]",
 +            now_s() - g_t0, first ? "" : "+", (unsigned long long)(first ? pi : pi - p_pi), first ? "" : "+", (unsigned long long)(first ? fa : fa - p_fa),
-+            (unsigned long long)(ti.phys_footprint >> 20), (unsigned long long)(ti.compressed >> 20), (unsigned long long)(ti.external >> 20),
++            (unsigned long long)(ti.phys_footprint >> 20), (unsigned long long)(ti.compressed >> 20), (unsigned long long)(ti.external >> 20), (unsigned long long)(nvn_dirty_released() >> 20),
 +            (unsigned long long)(vs.free_count * kpg >> 20), (unsigned long long)(vs.external_page_count * kpg >> 20), (unsigned long long)(vs.compressor_page_count * kpg >> 20),
 +            (unsigned long long)(first ? 0 : po - p_po), (unsigned long long)(first ? 0 : dc - p_dc),
 +            (unsigned long long)(anon >> 20), (unsigned long long)(file >> 20), (unsigned long long)(refd >> 20), (unsigned long long)(al >> 20), (unsigned long long)(st >> 20), hl);
@@ -90,7 +99,7 @@ index 8e16fc3..ad8351e 100644
  static void *alias_windows_thread(void *arg);
  static void *regions_thread(void *arg);
  static void *zero_sweep_thread(void *arg);
-@@ -93,6 +174,9 @@ static void mem_init_once(void) {
+@@ -93,6 +183,9 @@ static void mem_init_once(void) {
      g_alias = g_as + 0x10000000; g_alias_cap = alias;
      g_stack = g_alias + g_alias_cap; g_stack_cap = DM_GAME_MEM_STACK;
      g_heap  = g_stack + g_stack_cap; g_heap_cap  = g_reserve - (size_t)(g_heap - g_as);
@@ -100,7 +109,7 @@ index 8e16fc3..ad8351e 100644
      if (!(g_alias_bits = calloc((g_alias_cap >> 18) + 1, sizeof *g_alias_bits))) die("alias region page bitmap calloc");
      if (!(g_alias_exposed = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_exposed))) die("alias exposure bitmap calloc");
      LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)g_reserve, g_heap, g_alias, g_stack);
-@@ -281,8 +365,15 @@ static void *zero_sweep_thread(void *arg) {
+@@ -281,8 +374,15 @@ static void *zero_sweep_thread(void *arg) {
      }
      return NULL;
  }

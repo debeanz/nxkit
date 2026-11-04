@@ -1,0 +1,16 @@
+diff --git a/dm/games/0400C3F00006E000/patches.py b/dm/games/0400C3F00006E000/patches.py
+new file mode 100644
+index 0000000..e426106
+--- /dev/null
++++ b/dm/games/0400C3F00006E000/patches.py
+@@ -0,0 +1,10 @@
++# Mario Kart World (0400C3F00006E000): the rewriter's patches of this game's own builds. dm/tools/patch_nso.py loads every profile's patches.py and applies those of a module's NSO build ID.
++CUTS = {
++  # nxkit (fps30.patch): a steady 30 fps. The framework's frame function (main+0x3a9e28) hands framework +0x214, the interval of the frame, to nvnWindowSetPresentInterval (main+0x3aa0a0), and it
++  # is what the frame's step follows (added to the frame counter at main+0x3a9fb8). Framework +0x210 chooses how the next interval is found (main+0x3a9ec8): 0 is dynamic, from the time the frames
++  # took, between 1 and 2, as the game runs on its own (54 changes of pacing in log 27, each an uneven stretch); 1 and 2 are fixed (main+0x3aa034). The cut reads it as 2, the game's own fixed 30 fps
++  # path, so the game's speed stays right; the host follows, and after a second at interval 2 its display link runs at 30 Hz (nvn_game_fps)
++  '9e244438c3d8ef1c703a6a85ef99c4f0': [
++    (0x3a9ec8, '681242b9', '48008052', 'fixed present interval 2, 30 fps: ldr w8,[x19,#0x210] -> mov w8,#2'),
++  ],
++}

@@ -2,7 +2,8 @@
 # PC attached its input encrypted (release pr2-ipa-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit; deleted as soon as it is
 # downloaded): the dump's ExeFS and the RomFS folders the build reads (Shader, Lib, Effect, Layout, UI, System), and the shader cache of an earlier run when there is one. Plumber Racer 2 is checked
 # out at PR2_REF with nxkit's display options (pr2/display-options.patch: launcher Resolution and Screen Scaling) and memory parts (pr2/mem-anon.patch: with mem_file, the alias
-# region, the stacks and the first 512 MB of the heap stay anonymous memory, DM_MEM_ANON; a "[mem] watch" log line every 10 s), then its NSP script builds the IPA without the game files
+# region, the stacks and the first 512 MB of the heap stay anonymous memory, DM_MEM_ANON; a "[mem] watch" log line every 10 s), texture cap (pr2/tex-cap.patch: soft textures' longest side at most
+# 512, DM_NVN_TEX_CAP, and the dropped levels' pages go back from the file) and a fixed 30 fps (pr2/fps30.patch), with the diagnostic switches of pr2/env.txt, then its NSP script builds the IPA without the game files
 # (--romfs separate). Output, encrypted: the slim IPA as the artifact "ipa" (the PC adds the whole RomFS image and deletes the artifacts), the shader cache as "shaders", or the
 # build logs as "logs".
 name: PR2 IPA
@@ -64,6 +65,8 @@ jobs:
         run: |
           git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/display-options.patch"
           git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/mem-anon.patch"
+          git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/tex-cap.patch"
+          git -C pr2 apply --whitespace=nowarn "$GITHUB_WORKSPACE/nxkit/pr2/fps30.patch"
 
       - name: Download the input and delete its release
         env:
@@ -87,7 +90,7 @@ jobs:
       - name: Build the IPA without the game files
         run: |
           cd pr2
-          rc=0; python3 scripts/build_ipa_from_nsp.py "$RUNNER_TEMP/game" --platform ios --romfs separate --progress lines -o "$RUNNER_TEMP/slim.ipa" < /dev/null || rc=$?
+          rc=0; python3 scripts/build_ipa_from_nsp.py "$RUNNER_TEMP/game" --platform ios --romfs separate --progress lines --env-file "$GITHUB_WORKSPACE/nxkit/pr2/env.txt" -o "$RUNNER_TEMP/slim.ipa" < /dev/null || rc=$?
           ls -l "$RUNNER_TEMP/slim.ipa" 2>/dev/null || true
           exit $rc
 

@@ -1,0 +1,203 @@
+diff --git a/dm/gfx/nvn/nvn_dirty.c b/dm/gfx/nvn/nvn_dirty.c
+index eca801a..8b57578 100644
+--- a/dm/gfx/nvn/nvn_dirty.c
++++ b/dm/gfx/nvn/nvn_dirty.c
+@@ -11,6 +11,8 @@
+ #include <mach/mach_time.h>
+ #include <sched.h>
+ #include <string.h>
++#include <stdlib.h>
++#include <pthread/qos.h>
+ 
+ // Order of page state and mprotect: the side changing protection first sets the state to BUSY and sets the final state only after mprotect has landed; other threads wait when they see BUSY.
+ //   set read-only: NONE -> BUSY -> mprotect(read-only) -> PROT; unprotect: PROT -> BUSY -> mprotect(writable) -> NONE.
+@@ -28,7 +30,7 @@ enum { BLK_SHIFT = 10, BLK = 1 << BLK_SHIFT, NBLK = 256, MAX_RANGE = BLK * NBLK
+ // Ranges are rounded to host pages (16 KB) but guest memory pools are only 4 KB aligned: adjacent pools share their first / last pages, so one address can fall in several registered ranges.
+ // So: "is this texture tracked" looks for a range that holds its whole span; a fault / host pre-write unprotects and stamps every range covering that page; pool destruction identifies its range by the pool's exact start mem.
+ // (Previously the first range containing the address was always taken: two SMBW ASTC 6x5 textures whose pool's first page is shared with a small preceding pool were judged untracked and re-uploaded on every use, about 6 MB per frame)
+-typedef struct { uintptr_t base, end, mem; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; _Atomic uint64_t last; } range_t;   // last: the newest generation of any of its pages
++typedef struct { uintptr_t base, end, mem; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; _Atomic uint64_t last; _Atomic uint64_t seq; } range_t;   // last: the newest generation of any of its pages; seq: which registration holds the slot
+ static _Atomic(range_t *) g_blk[NBLK];
+ static inline range_t *rg(int i) { return &atomic_load_explicit(&g_blk[i >> BLK_SHIFT], memory_order_acquire)[i & (BLK - 1)]; }
+ static _Atomic int g_nr;
+@@ -138,10 +140,83 @@ static void prep_write(void *addr, size_t len) {
+ // changed in between was a game write, which keeps the page and dirties it as a fault would, or the system taking the page at once (all zeros), which gets the host's copy back.
+ // The memory goes at the system's next need: until then the page still reads as before. A write later faults (it is read-only) and takes the page back (MADV_FREE_REUSE)
+ static _Atomic uint64_t g_released;
+-__attribute__((weak)) int dm_guest_file_backed(void) { return 0; }   // hle_svc.c: guest memory in a file (profile mem_file) is not the process's: nothing to give back
++__attribute__((weak)) int dm_guest_file_backed(void) { return 0; }   // hle_svc.c: guest memory in a file (profile mem_file) is not the process's
++__attribute__((weak)) int dm_guest_in_file(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: this address is one of the file's (mem-anon.patch keeps parts anonymous)
++__attribute__((weak)) int dm_guest_punch(uintptr_t a, size_t n) { (void)a; (void)n; return 0; }   // hle_svc.c: a hole in the file: the range reads as zeros and holds no memory or disk blocks
++// nxkit (tex-cap.patch): with guest memory in a file, bytes the host no longer reads (expect NULL: the finest levels of a soft texture) go back too: on the file's pages by a hole, at once and
++// with nothing written to flash, on an anonymous part's as below. A hole takes a file system transaction, so a thread of its own does the work, not the submit thread. A job holds its range's
++// registration and the dirty-page time when it was queued: a page rewritten since, or a pool made again over the memory, is left. Each run of pages is BUSY only while its hole is made (at most
++// RUN_MAX pages), so a fault or a pool's destruction waits for one call. Tiles (expect set) stay as they were: a hole would drop bytes the game may still read
++typedef struct rel_job { struct rel_job *next; range_t *r; uint64_t seq, stamp; uintptr_t lo, hi; } rel_job;
++static pthread_mutex_t g_rel_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_rel_cv = PTHREAD_COND_INITIALIZER;
++static rel_job *g_rel_head, **g_rel_tail = &g_rel_head; static int g_rel_started;
++enum { RUN_MAX = 256 };
++static size_t rel_anon_page(range_t *r, uintptr_t p, uintptr_t pa) {   // the page is BUSY: as nvn_dirty_release below, with its bytes as they are now
++    static _Thread_local uint8_t snap[65536];
++    if (g_pg > sizeof snap) { atomic_store(&r->state[p], PG_PROT); return 0; }
++    memcpy(snap, (const void *)pa, g_pg);
++    mp(pa, g_pg, PROT_READ | PROT_WRITE); madvise((void *)pa, g_pg, MADV_FREE_REUSABLE); mp(pa, g_pg, PROT_READ);
++    if (memcmp((const void *)pa, snap, g_pg)) {
++        int zero = 1; for (size_t k = 0; k < g_pg && zero; k += 8) zero = !*(const uint64_t *)(pa + k);
++        mp(pa, g_pg, PROT_READ | PROT_WRITE); madvise((void *)pa, g_pg, MADV_FREE_REUSE);
++        if (zero) { memcpy((void *)pa, snap, g_pg); mp(pa, g_pg, PROT_READ); atomic_store(&r->state[p], PG_PROT); }
++        else { stamp_page(r, p); atomic_store(&r->state[p], PG_NONE); }
++        return 0;
++    }
++    atomic_store(&r->state[p], PG_PROT); return g_pg;
++}
++static void rel_flush(range_t *r, uintptr_t p0, uintptr_t n) {   // pages p0.. of the file are BUSY
++    if (!n) return;
++    uintptr_t a = r->base + (p0 << g_shift);
++    if (dm_guest_punch(a, n << g_shift)) atomic_fetch_add(&g_released, n << g_shift);
++    for (uintptr_t k = 0; k < n; k++) atomic_store(&r->state[p0 + k], PG_PROT);
++}
++static void rel_do(const rel_job *j) {
++    range_t *r = j->r; uintptr_t run = 0, n = 0;
++    for (uintptr_t pa = j->lo; pa < j->hi; pa += g_pg) {
++        uintptr_t p = (pa - r->base) >> g_shift; uint8_t st = PG_PROT;
++        if (!atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY)) { rel_flush(r, run, n); n = 0; continue; }   // written or being changed: it stays
++        if (!atomic_load_explicit(&r->live, memory_order_acquire) || atomic_load(&r->seq) != j->seq || atomic_load(&r->gen[p]) > j->stamp) { atomic_store(&r->state[p], PG_PROT); rel_flush(r, run, n); n = 0; continue; }
++        if (!dm_guest_in_file(pa)) { rel_flush(r, run, n); n = 0; atomic_fetch_add(&g_released, rel_anon_page(r, p, pa)); continue; }
++        if (n && run + n == p && n < RUN_MAX) { n++; continue; }
++        rel_flush(r, run, n); run = p; n = 1;
++    }
++    rel_flush(r, run, n);
++}
++static void *rel_thread(void *arg) {
++    (void)arg; pthread_setname_np("dm texture release"); pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
++    for (;;) {
++        pthread_mutex_lock(&g_rel_mu);
++        while (!g_rel_head) pthread_cond_wait(&g_rel_cv, &g_rel_mu);
++        rel_job *j = g_rel_head; if (!(g_rel_head = j->next)) g_rel_tail = &g_rel_head;
++        pthread_mutex_unlock(&g_rel_mu);
++        rel_do(j); free(j);
++    }
++    return NULL;
++}
++// Queues [lo, hi) less pages other pools share (at a pool's ends: they are only 4 KB aligned); → the bytes queued
++static size_t rel_queue(uintptr_t lo, uintptr_t hi) {
++    range_t *r = NULL; int n = atomic_load(&g_nr);
++    for (int i = 0; i < n; i++) { range_t *x = rg(i); if (live_at(i) && lo < x->end && hi > x->base && (!r || (x->base <= lo && x->end >= hi))) r = x; }
++    if (!r || r->base > lo || r->end < hi) return 0;
++    for (int i = 0; i < n; i++) {
++        range_t *x = rg(i); if (x == r || !live_at(i) || lo >= x->end || hi <= x->base) continue;
++        if (x->base <= lo) lo = x->end; else if (x->end >= hi) hi = x->base; else return 0;
++        if (lo >= hi) return 0;
++    }
++    rel_job *j = malloc(sizeof *j); if (!j) return 0;
++    *j = (rel_job){NULL, r, atomic_load(&r->seq), nvn_dirty_now(), lo, hi};
++    pthread_mutex_lock(&g_rel_mu);
++    *g_rel_tail = j; g_rel_tail = &j->next;
++    if (!g_rel_started) { pthread_t th; if (!pthread_create(&th, NULL, rel_thread, NULL)) { pthread_detach(th); g_rel_started = 1; } }
++    pthread_cond_signal(&g_rel_cv);
++    pthread_mutex_unlock(&g_rel_mu);
++    return hi - lo;
++}
+ size_t nvn_dirty_release(const void *addr, size_t len, const void *expect) {
+     uintptr_t a = (uintptr_t)addr, lo = (a + g_pg - 1) & ~(g_pg - 1), hi = (a + len) & ~(g_pg - 1); size_t freed = 0;
+-    if (!g_pg || dm_guest_file_backed()) return 0;
++    if (!g_pg) return 0;
++    if (dm_guest_file_backed()) return expect || lo >= hi ? 0 : rel_queue(lo, hi);
+     for (uintptr_t pa = lo; pa < hi; pa += g_pg) {
+         range_t *r = NULL; int n = atomic_load(&g_nr), cover = 0;
+         for (int i = 0; i < n; i++) { range_t *x = rg(i); if (live_at(i) && pa >= x->base && pa < x->end) { r = x; cover++; } }
+@@ -202,6 +277,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
+     }
+     r->base = base; r->end = end; r->mem = (uintptr_t)mem; r->state = state; r->gen = gen;
+     atomic_store(&r->last, 0);
++    { static _Atomic uint64_t seq; atomic_store(&r->seq, atomic_fetch_add(&seq, 1) + 1); }
+     if (slot == n) atomic_store(&g_nr, n + 1);
+     atomic_store_explicit(&r->live, 1, memory_order_release);
+     pthread_mutex_unlock(&g_slot_mu);
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 7657d5c..1ced346 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -1961,11 +1961,12 @@ static void pkg_store_sweep(void) {
+ }
+ // The whole pages only level 0 of a soft texture holds, less the last (a texture made again a little lower over the same bytes, as the game does, has level 1 start inside it): nothing reads
+ // them again, as uploads start at level 1. Not under a zero-copy buffer, which holds its pages (mtl_pool_wrapped)
++static int tex_soft(const tex_t *t);
+ typedef struct { uint64_t serial, born, n; uint8_t *mem; } soft_pend;
+ static soft_pend *g_soft_pend; static uint32_t g_nsoft_pend, g_soft_pend_cap;
+ static uint64_t g_soft_released;
+ static void tex_soft_release(const tex_t *t) {   // on the submit thread, as soft_sweep: when it has lived SOFT_WAIT frames
+-    size_t pg = (size_t)getpagesize(); uint64_t l1 = nvn_tex_level_offset(&t->d, 1);
++    size_t pg = (size_t)getpagesize(); uint64_t l1 = nvn_tex_level_offset(&t->d, (unsigned)tex_soft(t));   // where the first kept level starts
+     if (l1 <= pg) return;
+     if (g_nsoft_pend == g_soft_pend_cap && !(g_soft_pend = realloc(g_soft_pend, (g_soft_pend_cap = g_soft_pend_cap ? g_soft_pend_cap * 2 : 256) * sizeof *g_soft_pend))) MDIE("soft texture list allocation failed");
+     g_soft_pend[g_nsoft_pend++] = (soft_pend){t->serial, atomic_load(&g_cur_frame), l1 - pg, t->mem};
+@@ -2083,17 +2084,24 @@ static int tex_atomic_capable(id<MTLTexture> base) { return pf_r32i(base.pixelFo
+ // texture is that of level 1 (half the size, one level less, sampled through the same normalized coordinates), and the pages only level 0 holds go back to the system (tex_soft_release)
+ // (later: soft_sweep, which leaves time for a first copy) and are never read again. About three quarters of a texture's bytes, twice over. Mario Kart World's race does not fit an iPhone 18 Pro otherwise. Level numbers the game gives
+ // (views, copies) are one lower here: tex_soft_level. Reads of the size in a shader see the smaller size
++// nxkit (tex-cap.patch): tex_soft says how many finest levels go, 0 when the texture is not soft. One, as above, and more until the longest side is at most the cap (DM_NVN_TEX_CAP, also from
++// Documents/env.txt; default 512, 0 = one level only), as long as two levels stay, the shortest side stays at least 64 and the new top level is whole blocks. A phone with 8 GB cannot hold
++// the race's textures and the game's memory together (log 27: 3.5 GB of GPU memory, under 100 MB free, over 1,000 page-ins a second)
++static unsigned g_soft_cap;
+ static int tex_soft(const tex_t *t) {
+-    static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_TEX_SOFT"); on = e && *e ? atoi(e) != 0 : DM_GAME_TEX_SOFT; if (on) MLOG("large block-compressed textures kept without their finest level (profile tex_soft; DM_NVN_TEX_SOFT=0 turns it off)"); }
++    static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_TEX_SOFT"), *c = getenv("DM_NVN_TEX_CAP"); g_soft_cap = c && *c ? (unsigned)atoi(c) : 512; int v = e && *e ? atoi(e) != 0 : DM_GAME_TEX_SOFT; if (v) MLOG("large block-compressed textures kept without their finest levels, longest side at most %u (profile tex_soft; DM_NVN_TEX_SOFT=0 turns it off, DM_NVN_TEX_CAP the size)", g_soft_cap); on = v; }
+     if (!on || !t->has_layout || !t->mem || t->d.levels < 3 || (t->d.target != 1 && t->d.target != 4)) return 0;
+     if (t->pool && t->pool->magic == MAGIC('P', 'O', 'O', 'L') && (t->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL)) return 0;   // a sparse pool's: sparse_upload, tiles that follow the game's mappings
+     if (MAX(t->d.width, t->d.height) < 512 || MIN(t->d.width, t->d.height) < 256) return 0;
+     int bw, bh; if (!nvn_fmt_bpb(t->d.format, &bw, &bh) || bw < 2) return 0;
+     uint64_t k = (uint64_t)(uintptr_t)t->mem; pthread_mutex_lock(&g_smu); int hard = nvn_hm_get(&g_soft_hard, &k) != NULL; pthread_mutex_unlock(&g_smu);
+-    return !hard;
++    if (hard) return 0;
++    unsigned sk = 1, top = MAX(t->d.width, t->d.height), low = MIN(t->d.width, t->d.height);
++    while (g_soft_cap && (top >> sk) > g_soft_cap && sk + 2 < t->d.levels && (low >> (sk + 1)) >= 64 && !((t->d.width >> (sk + 1)) % (unsigned)bw) && !((t->d.height >> (sk + 1)) % (unsigned)bh)) sk++;
++    return (int)sk;
+ }
+-// A level the game names, as the host texture's level: 0 when there is none (level 0 of a soft texture)
+-static int tex_soft_level(const tex_t *t, unsigned *level) { if (!t || !tex_soft(t)) return 1; if (!*level) return 0; --*level; return 1; }
++// A level the game names, as the host texture's level: 0 when there is none (a finest level of a soft texture)
++static int tex_soft_level(const tex_t *t, unsigned *level) { unsigned sk = t ? (unsigned)tex_soft(t) : 0; if (!sk) return 1; if (*level < sk) return 0; *level -= sk; return 1; }
+ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
+     uint32_t pf = 0; uint8_t swz[4];
+     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
+@@ -2103,7 +2111,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
+     d.pixelFormat = (MTLPixelFormat)pf;
+     d.width = t->d.width ? t->d.width : 1; d.height = t->d.height ? t->d.height : 1; d.depth = 1; d.arrayLength = 1;
+     d.mipmapLevelCount = t->d.levels ? t->d.levels : 1;
+-    if (packaged && tex_soft(t)) { d.width = MAX(d.width >> 1, 1u); d.height = MAX(d.height >> 1, 1u); d.mipmapLevelCount--; }
++    { unsigned sk = packaged ? (unsigned)tex_soft(t) : 0; if (sk) { d.width = MAX(d.width >> sk, 1u); d.height = MAX(d.height >> sk, 1u); d.mipmapLevelCount -= sk; } }
+     switch (t->d.target) {
+         // 1D / 1D array are created as one-row 2D / 2D array textures: translated shaders never declare texture1d (0 in all five games' libraries) and always sample them as 2D; a Metal 1D texture bound to a texture2d argument is a type mismatch with undefined reads.
+         // Super Mario 3D World + Bowser's Fury's material shaders sample 64x1 R32F 1D lookup tables heavily every frame (on Maxwell a 2D sample of a 1D texture reads that one row)
+@@ -2770,7 +2778,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
+     int rb_shift = rb_packed_shift(t->d.format);   // the RGB565 family is repacked into Metal's order on the CPU (rb_packed_shift)
+     // On the CPU while its pool has no zero-copy buffer: the GPU's upload would give it one (mtl_addr), and iOS reads a buffer's whole pool into memory and wires it, for a pool the GPU may otherwise never address
+     int keep_cpu = (pst_eligible(t) || DM_GAME_TEX_SOFT) && t->has_layout && !mtl_pool_wrapped(t->mem, t->L.size);
+-    unsigned sk = tex_soft(t) ? 1 : 0;   // source level = host level + sk
++    unsigned sk = (unsigned)tex_soft(t);   // source level = host level + sk
+     int direct = !sk && !keep_cpu && !rb_shift && stamp && direct_upload_on() && g_nvn_deswz_gpu && !(t->pool && nvn_sparse_pool(t->pool)) && nvn_deswz_gpu_direct_supported(&t->d);
+     if (direct) d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
+     id<MTLTexture> mt = reuse && reuse.pixelFormat == d.pixelFormat && reuse.width == d.width && reuse.height == d.height && reuse.mipmapLevelCount == d.mipmapLevelCount && reuse.textureType == d.textureType
+@@ -5119,7 +5127,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
+             sg = g_ser_gen;
+         }
+         NSUInteger l0 = r.v.set_levels ? r.v.base_level : 0, nl = r.v.set_levels && r.v.nlevels ? r.v.nlevels : base.mipmapLevelCount - l0;
+-        if (l0 && tex_soft(&rp->t) && base.width < rp->t.d.width) { l0--; if (!r.v.nlevels) nl = base.mipmapLevelCount - l0; }   // a soft texture has no level 0: a view of it starts at what is level 0 here, one level less
++        if (l0 && tex_soft(&rp->t) && base.width < rp->t.d.width) { NSUInteger sk = (NSUInteger)tex_soft(&rp->t); l0 = l0 > sk ? l0 - sk : 0; if (!r.v.nlevels) nl = base.mipmapLevelCount - l0; }   // a soft texture has no finest levels: a view of it starts at what is level 0 here at the earliest
+         if (l0 >= base.mipmapLevelCount) { RED_ONCE(109, "texture view id %d starts at mip %lu beyond %lu levels", tid, (unsigned long)l0, (unsigned long)base.mipmapLevelCount); return nil; }
+         // A level count past the texture's levels is cut to those it has, as deko3d's Tegra descriptor writer clips the maximum level (Echoes of Wisdom: levels 1 + 7 of a seven-level texture,
+         // which Metal's validation refuses)
+diff --git a/dm/host/hle_thread.c b/dm/host/hle_thread.c
+index e77c9e6..83b5b03 100644
+--- a/dm/host/hle_thread.c
++++ b/dm/host/hle_thread.c
+@@ -489,7 +489,7 @@ static void *hitch_main(void *arg) {
+     if (strchr(e, ':')) skip = (uint64_t)atoi(strchr(e, ':') + 1) * 1000000000ull;
+     extern uint64_t g_t0_ns;
+     static hitch_t hs[256];
+-    while (n < 24) {
++    while (n < 48) {
+         { struct timespec ts = {0, 2000000}; nanosleep(&ts, 0); }
+         uint64_t p = atomic_load(&dm_present_ns), now = now_ns();
+         if (!p || p == seen || now - p < lim || now - g_t0_ns < skip) continue;
