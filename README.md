@@ -178,6 +178,14 @@ entitlement (about 6 GB of memory instead of 3.4 GB). AltStore 2.2+ and Impactor
   Bayonetta 3). nxkit says so before uploading anything.
 - OpenGL games (Digimon Story Cyber Sleuth, LÖVE games such as Balatro) are not supported yet.
 
+## Build cache
+
+A game's second and later cloud builds reuse what the first one built: nxnative's shader cache (the translated shaders and
+compiled Metal libraries, looked up by their content, so a reused entry is exactly what a new build would make) and a game's
+own prebuilt libraries (Super Mario Maker 2's course server). The cache is kept per game in the repository's Actions caches,
+the shader part encrypted with the kit password (it is made from the game's files); a build replaces the game's older
+cache with its own. Delete a game's caches in the repository's Actions → Caches page to build everything again.
+
 ## When something fails
 
 - PC-side errors print the step and the log file under `<game folder>\<title ID>_build\logs`.

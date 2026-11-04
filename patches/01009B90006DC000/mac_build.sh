@@ -9,6 +9,15 @@ set -euo pipefail
 WORK=$1
 REF=18a4e880027f1432d3fc208e50f451d71b647c1c   # smm2recomp commit the patch was made against (its server API and 3.0.3 findings)
 SRC=$WORK/smm2recomp
+# The workflow's build cache (NXKIT_CACHE, kept between builds of this game): the library built for this commit, used as it is (open-source code only, no game data)
+CACHED=${NXKIT_CACHE:+$NXKIT_CACHE/libmmk_embed-$REF.a}
+if [ -n "$CACHED" ] && [ -f "$CACHED" ]; then
+  echo "course server library from the build cache: $CACHED" >&2
+  ls -l "$CACHED" >&2
+  echo "CFLAGS=-DDM_SMM2_EMBED=1"
+  echo "LDFLAGS=$CACHED -framework Security"
+  exit 0
+fi
 {
   if [ ! -d "$SRC/.git" ]; then
     git clone -q --filter=blob:none https://github.com/smm2recomp/smm2recomp.git "$SRC"
@@ -26,5 +35,9 @@ SRC=$WORK/smm2recomp
 LIB=$SRC/core/target/aarch64-apple-ios/release/libmmk_embed.a
 [ -f "$LIB" ] || { echo "no $LIB" >&2; exit 1; }
 ls -l "$LIB" >&2
+if [ -n "$CACHED" ]; then   # (kept for the next build; older commits' copies go)
+  rm -f "$NXKIT_CACHE"/libmmk_embed-*.a
+  cp "$LIB" "$CACHED" && LIB=$CACHED
+fi
 echo "CFLAGS=-DDM_SMM2_EMBED=1"
 echo "LDFLAGS=$LIB -framework Security"

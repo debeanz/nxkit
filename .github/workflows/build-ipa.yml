@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write   # deletes the kit's release
+  actions: write    # deletes the game's older build caches
 
 defaults:
   run:
@@ -84,7 +85,38 @@ jobs:
           unzip -q "$RUNNER_TEMP/kit.zip" -d "$RUNNER_TEMP/kit"
           rm "$RUNNER_TEMP/kit.zip"
 
+      # The build cache, per game (its title ID): nxnative's shader cache (kit/work/shader/cache/cas: translated shaders and compiled Metal libraries, looked up by
+      # content, so a restored one never changes an output, it only skips rebuilding) and the game's own prebuilt libraries (patches/<id>/mac_build.sh: NXKIT_CACHE).
+      # The shader cache is made from the game's files: it is stored encrypted with KIT_PASSWORD (a public repository's caches can be restored by pull requests)
+      - name: The kit's game
+        id: game
+        run: echo "id=$(python -c "import json; print(json.load(open('$RUNNER_TEMP/kit/meta.json'))['game'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nxcache
+          key: nxcache-${{ steps.game.outputs.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: nxcache-${{ steps.game.outputs.id }}-
+
+      - name: Unpack the shader cache
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/nxcache" "$RUNNER_TEMP/kit/work/shader/cache"
+          if [ -f "$RUNNER_TEMP/nxcache/shader-cas.tar.zst.nxk" ]; then
+            python nxkit/nxkit.py decrypt "$RUNNER_TEMP/nxcache/shader-cas.tar.zst.nxk" "$RUNNER_TEMP/shader-cas.tar.zst"
+            zstd -dcq "$RUNNER_TEMP/shader-cas.tar.zst" | tar -C "$RUNNER_TEMP/kit/work/shader/cache" -xf -
+            rm "$RUNNER_TEMP/shader-cas.tar.zst"
+            echo "shader cache: $(du -sh "$RUNNER_TEMP/kit/work/shader/cache/cas" | cut -f1) restored"
+          else
+            echo "no shader cache for this game yet: every shader is built"
+          fi
+          ls -l "$RUNNER_TEMP/nxcache"
+
       - name: Build the slim IPA
+        env:
+          NXKIT_CACHE: ${{ runner.temp }}/nxcache
         run: python nxkit/nxkit.py build nxnative "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/slim.ipa" < /dev/null
 
       - name: Encrypt the IPA
@@ -101,6 +133,34 @@ jobs:
           path: ${{ runner.temp }}/out/slim.ipa.nxk
           compression-level: 0
           retention-days: 1
+
+      - name: Pack the shader cache
+        env:
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          CAS="$RUNNER_TEMP/kit/work/shader/cache/cas"
+          if [ -d "$CAS" ]; then
+            rm -f "$RUNNER_TEMP/nxcache/shader-cas.tar.zst.nxk"
+            tar -C "$(dirname "$CAS")" -cf - cas | zstd -3 -T0 -q -o "$RUNNER_TEMP/shader-cas.tar.zst"
+            python nxkit/nxkit.py encrypt "$RUNNER_TEMP/shader-cas.tar.zst" "$RUNNER_TEMP/nxcache/shader-cas.tar.zst.nxk"
+            rm "$RUNNER_TEMP/shader-cas.tar.zst"
+          fi
+          ls -lh "$RUNNER_TEMP/nxcache"
+
+      - name: Save the build cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nxcache
+          key: nxcache-${{ steps.game.outputs.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Delete the game's older build caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEEP: nxcache-${{ steps.game.outputs.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          PREFIX: nxcache-${{ steps.game.outputs.id }}-
+        run: |
+          gh cache list --key "$PREFIX" --limit 100 --json id,key --jq ".[] | select(.key != \"$KEEP\") | .id" | while read -r id; do gh cache delete "$id" || true; done
 
       - name: Encrypt the build logs
         if: failure()
@@ -123,4 +183,4 @@ jobs:
 
       - name: Clean up
         if: always()
-        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/kit.zip" "$RUNNER_TEMP/slim.ipa" "$RUNNER_TEMP/logs.tgz"
+        run: rm -rf "$RUNNER_TEMP/kit" "$RUNNER_TEMP/kit.zip" "$RUNNER_TEMP/slim.ipa" "$RUNNER_TEMP/logs.tgz" "$RUNNER_TEMP/nxcache" "$RUNNER_TEMP/shader-cas.tar.zst"
