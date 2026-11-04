@@ -16,6 +16,7 @@ if [ -n "$CACHED" ] && [ -f "$CACHED" ]; then
   ls -l "$CACHED" >&2
   echo "CFLAGS=-DDM_SMM2_EMBED=1"
   echo "LDFLAGS=$CACHED -framework Security"
+  echo "ENV IOS_PULL=1"
   exit 0
 fi
 {
@@ -41,3 +42,6 @@ if [ -n "$CACHED" ]; then   # (kept for the next build; older commits' copies go
 fi
 echo "CFLAGS=-DDM_SMM2_EMBED=1"
 echo "LDFLAGS=$LIB -framework Security"
+# The pulling vertex libraries (<key>_bp) go into the app although the profile's pso_mtl4 is off: the launcher's Metal 4 switch then gets hybrid pipelines (a draw
+# whose pipeline is still compiling draws through a prebuilt one instead of waiting: the shader-compile stutters). build_ipa.sh left them out with pso_mtl4 off
+echo "ENV IOS_PULL=1"

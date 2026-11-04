@@ -183,6 +183,15 @@ entitlement (about 6 GB of memory instead of 3.4 GB). AltStore 2.2+ and Impactor
   Bayonetta 3). nxkit says so before uploading anything.
 - OpenGL games (Digimon Story Cyber Sleuth, LÖVE games such as Balatro) are not supported yet.
 
+## Shader-compile stutter
+
+A pipeline the game draws with for the first time is compiled at that draw (a long frame). The app records the ones it
+built in `Documents/pso_user.tsv` and builds them before the first frame next time, but a new install starts with an empty
+one. `py nxkit.py prewarm <game folder> <pso_user.tsv ...>` merges such files (from the app's Documents) into the game
+profile's built-in list (`pso_manifest.tsv`, for a provisional or derived profile), which the next `game` / `rebuild` puts
+into the app. Super Mario Maker 2 also gets its pulling vertex libraries packed (`IOS_PULL=1` from its `mac_build.sh`), so
+the launcher's Metal 4 switch has hybrid pipelines: a draw whose pipeline is still compiling draws through a prebuilt one.
+
 ## Build cache
 
 A game's second and later cloud builds reuse what the first one built: nxnative's shader cache (the translated shaders and

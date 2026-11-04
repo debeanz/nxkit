@@ -373,6 +373,7 @@ def build(repo, kit_dir, out_ipa):
             for line in r.stdout.splitlines():
                 k, _, v = line.partition('=')
                 if k in ('CFLAGS', 'LDFLAGS'): ipa_env[f'DM_EXTRA_{k}'] = v; say(f'{hook.name}: {k} {v}')
+                elif k.startswith('ENV ') and k[4:] in ('IOS_PULL',): ipa_env[k[4:]] = v; say(f'{hook.name}: {k[4:]}={v}')   # build_ipa.sh switches a game sets (IOS_PULL=1: pack the pulling libraries)
             B.PROG.end()
         B.PROG.stage('app build')
         B.run(['bash', repo / 'dm/ios/tools/build_ipa.sh', out_ipa], logs / 'build_ipa.log', env=ipa_env)
@@ -612,6 +613,31 @@ def sysdata_cmd(a):
     say('now build the IPA again (rebuild): the system data goes into it')
 
 
+def prewarm_cmd(a):
+    """The pipelines the app recorded on the device (Documents/pso_user.tsv, one or more copies) into the game's profile prewarm list (pso_manifest.tsv), which the next game / rebuild
+    puts into the app: every pipeline in it is built before the first frame, so a new install or a cleared pso_user.tsv starts with them instead of compiling them at their first draw.
+    Only for a provisional or derived profile (the one in <title ID>_build/profile); not a shader input, so no shader is built again"""
+    folder = Path(a.nsp_dir).resolve()
+    found = sorted(folder.glob('*_build/nxkit.json'))
+    if not found: raise KitError(f'no earlier build in {folder} (<title ID>_build/nxkit.json): build the game first')
+    info = json.loads(found[0].read_text())
+    man = found[0].parent / 'profile' / info['game'] / 'pso_manifest.tsv'
+    if not man.parent.is_dir(): raise KitError(f'{man.parent} does not exist: prewarm sets the list of a provisional or derived profile only (a repository profile has its own)')
+    old = man.read_text(encoding='utf-8').splitlines() if man.is_file() else []
+    head = [l for l in old if l.startswith('#')] or ['# Prewarm seed list (shipped in the app, next to shader_map.tsv). Rows: S<TAB>shader key<TAB>stage / R<TAB>render pipeline key (pso_skey hex) / C<TAB>compute shader key.']
+    rows, seen = [], set()
+    for src in [None] + [Path(f) for f in a.files]:
+        lines = old if src is None else src.read_text(encoding='utf-8', errors='replace').splitlines()
+        for l in lines:
+            l = l.rstrip('\r')
+            if not l or l.startswith('#') or l.split('\t', 1)[0] not in ('S', 'R', 'C') or l in seen: continue
+            seen.add(l); rows.append(l)
+    had = sum(1 for l in old if l and not l.startswith('#'))
+    man.write_text('\n'.join(head + rows) + '\n', encoding='utf-8')
+    n = lambda k: sum(1 for r in rows if r.startswith(k + '\t'))
+    say(f'{man}: {len(rows)} rows ({len(rows) - had} new): {n("S")} shaders, {n("R")} render pipelines, {n("C")} compute pipelines; now build the IPA again (rebuild)')
+
+
 def fetch_logs(slug, run_id, dst, password):
     """A failed cloud build's encrypted nxnative logs (the artifact "logs") → dst, readable"""
     import tarfile
@@ -677,6 +703,8 @@ def main(argv=None):
     s = sub.add_parser('sysdata', help='system data (MiiModel) from your own firmware dump into the game\'s IPA')
     s.add_argument('nsp_dir', help='the game\'s folder (with <title ID>_build from a build)'); s.add_argument('firmware', help='folder of your firmware dump\'s .nca files')
     s.add_argument('-k', '--keys', required=True, help='prod.keys that open that firmware'); s.add_argument('--hactool', required=True, help='path of hactool')
+    s = sub.add_parser('prewarm', help='the pipelines your device recorded (pso_user.tsv) into the game\'s built-in prewarm list')
+    s.add_argument('nsp_dir', help='the game\'s folder (with <title ID>_build from a build)'); s.add_argument('files', nargs='+', help='pso_user.tsv files from the app\'s Documents')
     s = sub.add_parser('prepare', help='PC step: the build kit (unencrypted zip)')
     s.add_argument('repo'); s.add_argument('nsp_dir'); s.add_argument('-k', '--keys', required=True); s.add_argument('-o', '--out', required=True)
     s.add_argument('-p', '--package'); s.add_argument('--app-name'); s.add_argument('--bundle-id'); s.add_argument('-l', '--language')
@@ -693,6 +721,7 @@ def main(argv=None):
         elif a.cmd == 'game': game_cmd(a)
         elif a.cmd == 'rebuild': rebuild_cmd(a)
         elif a.cmd == 'sysdata': sysdata_cmd(a)
+        elif a.cmd == 'prewarm': prewarm_cmd(a)
         elif a.cmd == 'prepare':
             repo = Path(a.repo).resolve()
             commit = run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
