@@ -472,8 +472,13 @@ def cloud_ipa(cfg, home, kit_enc, tag, commit, finish):
             jobs = json.loads(gh('api', f'repos/{slug}/actions/runs/{run_id}/jobs', capture=True))['jobs']
             if attempt < NO_RUNNER_TRIES and jobs and all(j['conclusion'] == 'cancelled' and not j['steps'] for j in jobs):
                 say(f'no GitHub macOS runner took the build (GitHub is short of them); starting it again in a minute ({attempt} of {NO_RUNNER_TRIES - 1} retries)')
-                time.sleep(60)
-                gh('run', 'rerun', run_id, '--repo', slug)
+                for wait in (60, 60, 120, 120, 240):   # (GitHub refuses a rerun for a while after it cancels the job: "This workflow is already running")
+                    time.sleep(wait)
+                    r = subprocess.run(['gh', 'run', 'rerun', str(run_id), '--repo', slug], capture_output=True, text=True)
+                    if not r.returncode: break
+                    say(f'GitHub did not start it again yet ({(r.stderr or "").strip()[-160:]}); trying again')
+                else:
+                    raise KitError(f'GitHub would not start the build again: https://github.com/{slug}/actions/runs/{run_id}')
                 time.sleep(20)
                 continue
             fetch_logs(slug, run_id, home / 'logs' / tag, cfg['password'])
