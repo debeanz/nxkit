@@ -159,10 +159,10 @@ index 7f41e6c3..09b9556d 100644
 +HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence unavailable (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; if (dm_online()) { dm_online_note("friends::UserPresence::SetDescription", 1); return RES_OK; } return RES_FAIL; }
 +HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence unavailable (cut)", Result, h_fr_UpCommit, void *self) { (void)self; if (dm_online()) { dm_online_note("friends::UserPresence::Commit", 1); return RES_OK; } return RES_FAIL; }
 diff --git a/dm/host/hle_misc.c b/dm/host/hle_misc.c
-index 93a0f905..f8707101 100644
+index 93a0f905..8cc9c443 100644
 --- a/dm/host/hle_misc.c
 +++ b/dm/host/hle_misc.c
-@@ -154,8 +154,18 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "profanity
+@@ -154,12 +154,26 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "profanity
  HLE_FORCE("_ZN2nn3ngc15ProfanityFilter8FinalizeEv", "profanity filter shutdown; the host mounted no word list", void, h_ngc_Fini, void *self) { (void)self; }
  
  // ---------- nsd server name resolution / pctl free communication: networking, out of scope ----------
@@ -182,7 +182,26 @@ index 93a0f905..f8707101 100644
 +}
  // bool arguments only look at the low 8 bits; returns bool
  // The permission query answers as TryBegin / IsFreeCommunicationAvailable do: the SDK's version calls the pctl service (pctl::detail::ipc::GetService), which the host never opens (DRAGON QUEST XI S imports it; from PR #38)
- HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "parental controls · permission to communicate with others, networking out of scope; never, no system UI", unsigned, h_pctl_CheckFree, unsigned show_ui) { (void)show_ui; return 0; }
+-HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "parental controls · permission to communicate with others, networking out of scope; never, no system UI", unsigned, h_pctl_CheckFree, unsigned show_ui) { (void)show_ui; return 0; }
+-HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "parental controls · communication with others, networking out of scope; never allowed", unsigned, h_pctl_TryBegin, unsigned show_ui) { (void)show_ui; return 0; }
++HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "parental controls · permission to communicate with others, networking out of scope; never, no system UI", unsigned, h_pctl_CheckFree, unsigned show_ui) {
++    (void)show_ui;   // Super Mario Maker 2's Course World (dm_online): allowed. Its Course World button asks this first and, answered "not allowed" with no UI, does nothing
++    if (dm_online()) { dm_online_note("pctl::CheckFreeCommunicationPermission", 1); return 1; }
++    return 0;
++}
++HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "parental controls · communication with others, networking out of scope; never allowed", unsigned, h_pctl_TryBegin, unsigned show_ui) { (void)show_ui; if (dm_online()) { dm_online_note("pctl::TryBeginFreeCommunication", 1); return 1; } return 0; }
+ // Parental control of the 3D (VR goggles) mode, Super Mario Odyssey: no restriction, nothing to configure
+ HLE_FORCE("_ZN2nn4pctl26GetStereoVisionRestrictionEv", "parental controls · 3D view restriction; never restricted", unsigned, h_pctl_GetStereo, void) { return 0; }
+ HLE_FORCE("_ZN2nn4pctl26SetStereoVisionRestrictionEb", "parental controls · 3D view restriction; the host does not store it", void, h_pctl_SetStereo, unsigned on) { (void)on; }
+@@ -167,7 +181,7 @@ HLE_FORCE("_ZN2nn4pctl42ConfirmStereoVisionRestrictionConfigurableEv", "parental
+ HLE_FORCE("_ZN2nn4pctl53RequestStereoVisionRestrictionConfigurationPermissionEv", "parental controls · permission to change the 3D restriction; granted at once", Result, h_pctl_ReqStereo, void) { return RES_OK; }
+ HLE_FORCE("_ZN2nn4pctl20EndFreeCommunicationEv", "parental controls · communication with others", void, h_pctl_End, void) {}
+ // Engage asks on entering a battle map (no UI); without this the SDK connects to the pctl service through sm, which the host does not have, and aborts
+-HLE_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", "parental controls · whether communication with others is available, networking out of scope; never", unsigned, h_pctl_IsFree, void) { return 0; }
++HLE_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", "parental controls · whether communication with others is available, networking out of scope; never", unsigned, h_pctl_IsFree, void) { if (dm_online()) { dm_online_note("pctl::IsFreeCommunicationAvailable", 1); return 1; } return 0; }
+ // The Legend of Zelda: Breath of the Wild: checks the parental-control permission for stereoscopic 3D before VR-related screens (returns bool; the argument = whether to show UI, the game passes 0). The host has no parental controls: permitted
+ HLE_FORCE("_ZN2nn4pctl27CheckStereoVisionPermissionEb", "parental controls · stereoscopic 3D permission; the host has no parental controls, allowed", unsigned, h_pctl_Stereo, unsigned show_ui) { (void)show_ui; return 1; }
+ 
 diff --git a/dm/host/hle_net.c b/dm/host/hle_net.c
 index 16b70adc..cfe413be 100644
 --- a/dm/host/hle_net.c

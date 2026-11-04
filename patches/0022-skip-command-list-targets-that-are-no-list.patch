@@ -1,0 +1,100 @@
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index 7ceee720..c63c917d 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1157,7 +1157,11 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
+     mtl_sub_begin();
+     nvn_ft_poll();
+     mtl_sub_index((const uint64_t *)h, n);
+-    for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
++    for (int i = 0; i < n; i++) {
++        uintptr_t v = (uintptr_t)h[i];   // (nxkit 0022) a handle that cannot be a command list is skipped, not replayed (nvn_mtl.m cmd_target_bad)
++        if (v < 0x10000 || v >> 48) { static int bad; if (bad++ < 8) LOG("[RED] QueueSubmitCommands: handle %d of %d is %#lx, no command list; skipped (nxkit 0022)", i, n, (unsigned long)v); continue; }
++        mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]);
++    }
+     mtl_exec_rest(NULL, 0);
+     mtl_sub_commit();
+     pthread_mutex_unlock(&g_sub_mu);
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index b5684089..65ec8a17 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -5761,6 +5761,16 @@ static const uint8_t *g_exec_next;   // The op following the current draw in the
+ static const uint8_t *g_exec_cur;    // The current draw's own op (set with g_exec_next)
+ static const uint8_t *g_ret[16]; static int g_ret_n;   // Call return stack of the replay (at OP_CALL the caller's next op is pushed)
+ static const uint64_t *g_rest; static int g_nrest;      // Handles in this submission still to be replayed after the current handle
++// (nxkit 0022) A JUMP / CALL target that cannot be a command list (below 64 KB or with high address bits set): the record or the list it points into was
++// overwritten, a recording whose memory was reused. Super Mario Maker 2 crashed here (sig 11 at address 0x1) soon after its command memory first overflowed into a
++// host-lent segment. The record is skipped, as a list that ends there, and the first few are logged with where they were
++static int cmd_target_bad(const void *t, const char *what, const void *rec) {
++    uintptr_t v = (uintptr_t)t;
++    if (v >= 0x10000 && !(v >> 48)) return 0;
++    static int n; if (n++ < 8) MLOG("[RED] command lists: a %s record at %p points at %p, which is no command list (overwritten: a recording whose memory was reused?); skipped, %d so far (nxkit 0022)",
++                                    what, (const uint8_t *)rec - 8, t, n);
++    return 1;
++}
+ void mtl_exec_rest(const uint64_t *h, int n) { g_rest = h; g_nrest = n; }
+ static uint64_t g_stat_ds_omit;      // Number of passes that attach less depth-stencil because the lookahead proved it unused (including stencil-only / depth-only)
+ static uint64_t g_stat_s_only, g_stat_d_only;   // Of those, the number of passes that attach only stencil / only depth
+@@ -5780,8 +5790,8 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
+                 else if (c->rest_i < g_nrest) c->p = (const uint8_t *)g_rest[c->rest_i++];
+                 else { c->p = NULL; return 0; }
+                 continue;
+-            case OP_JUMP: memcpy(&c->p, a, 8); continue;
+-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= 8) { c->bad = 1; return 0; }
++            case OP_JUMP: memcpy(&c->p, a, 8); if (cmd_target_bad(c->p, "JUMP", a)) { c->bad = 1; return 0; } continue;
++            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= 8 || cmd_target_bad((const void *)t, "CALL", a)) { c->bad = 1; return 0; }
+                 c->ret[c->ret_n++] = c->p + h.size; c->p = (const uint8_t *)t; continue; }
+             default: break;
+         }
+@@ -5848,8 +5858,8 @@ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
+         if (g_hoist_n && hoist_skipped(p)) { p += h.size; continue; }   // Clear pass already executed early
+         switch (h.op) {
+             case OP_END: return DS_RET;
+-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
+-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8) return DS_USED;
++            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) return DS_USED; p = t; continue; }
++            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8 || cmd_target_bad((const void *)t, "CALL", a)) return DS_USED;
+                 int r = ds_scan((const uint8_t *)t, ds, depth + 1); if (r != DS_RET) return r; break; }
+             case OP_SET_RT: case OP_COPY_B2B: case OP_CLEAR_BUF: case OP_UPDATE_UB: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: return DS_FREE;
+             case OP_CLEAR_COLOR: case OP_CLEAR_DS: g_ds_why = h.op; return DS_USED;
+@@ -6305,8 +6315,8 @@ static void sdx_walk(const uint8_t *p, int depth) {
+         uint32_t seq = g_sdx_nop; g_sdx_op[g_sdx_nop++] = p;
+         switch (h.op) {
+             case OP_END: return;
+-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
+-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); sdx_walk((const uint8_t *)t, depth + 1); break; }
++            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) return; p = t; continue; }
++            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (!cmd_target_bad((const void *)t, "CALL", a)) sdx_walk((const uint8_t *)t, depth + 1); break; }
+             case OP_SET_RT: { const p_set_rt *r = a; g_pp_rt = r; g_pp_rtseq = seq; seq_push(&g_rtx_seq, &g_rtx_n, &g_rtx_cap, seq);
+                 for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) sdx_bucket(r->color[k]->serial, 1);
+                 if (r->depth) sdx_bucket(r->depth->serial, 1);
+@@ -6423,7 +6433,7 @@ static void hoist_try(void) {
+         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
+         switch (h.op) {
+             case OP_END: case OP_CALL: case OP_COPY_T2T: case OP_COPY_B2T: case OP_COPY_T2B: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_RENDER_COND: return;
+-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
++            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) return; p = t; continue; }
+             case OP_DRAW: case OP_DRAW_IDX: if (in_grp) return; break;
+             case OP_SCISSOR: sc = *(const p_scissor *)a; has_sc = 1; break;
+             case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_IMG: { p_bind_handles t1; const p_bind_handles *b = bind_rec(h.op, a, &t1); bh_fresh(b); for (int k = 0; k < b->n && k < 32 && nbh < 512; k++) if (b->h[k]) bh[nbh++] = b->h[k]; break; }
+@@ -6709,7 +6719,7 @@ static void defer_try(const p_draw *dw, const p_draw_idx *di) {
+         switch (h.op) {
+             case OP_END: { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 1; goto fail; } p = nx; continue; }
+             case OP_CALL: g_defer.reason = 2; goto fail;
+-            case OP_JUMP: memcpy(&p, a, 8); continue;
++            case OP_JUMP: memcpy(&p, a, 8); if (cmd_target_bad(p, "JUMP", a)) goto fail; continue;
+             case OP_BIND_PROGRAM: pg = ((const p_bind_program *)a)->prog; break;
+             case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_IMG: { p_bind_handles t1; const p_bind_handles *b = bind_rec(h.op, a, &t1); bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : NTEX;
+                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } break; }
+@@ -8692,8 +8702,8 @@ void mtl_exec(const uint8_t *p) {
+                 }
+                 return;   // An end-of-pass triggered outside a list (present / CPU readback etc.) must not scan expired command memory: a null start point means store everything
+             case OP_BEGIN: break;
+-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
+-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
++            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) { g_exec_cur = NULL; return; } p = t; continue; }
++            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (cmd_target_bad((const void *)t, "CALL", a)) break;
+                 if (g_ret_n < 16) g_ret[g_ret_n] = p + h.size; g_ret_n++;   // Return stack for lookahead: after a sub-list ends, continue looking at the caller
+                 mtl_exec((const uint8_t *)t); g_ret_n--; break; }
+             case OP_SIGNAL_EVENT: { volatile uint32_t *val; uint32_t m, v; memcpy(&val, a, 8); memcpy(&m, (const uint8_t *)a + 8, 4); memcpy(&v, (const uint8_t *)a + 12, 4);

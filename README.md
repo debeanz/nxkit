@@ -89,6 +89,9 @@ General, every game:
   multiply in such a texture and parts of them were invisible.
 - **Sound in silent mode**: the app's audio session is Playback instead of SoloAmbient, so games are heard with the
   Ring / Silent switch on silent. `DM_AUDIO_SILENT_SWITCH=1` in `env.txt` follows the switch again.
+- **Command list targets that are no list are skipped** (0022): a JUMP / CALL record (or a submitted handle) pointing below 64 KB
+  or with high address bits set is logged and skipped instead of crashing the Metal replay. Super Mario Maker 2 crashed there
+  (`CRASH sig=11 addr=0x1 pc=mtl_exec+0x158`) soon after its command memory first overflowed into a host-lent segment.
 - **App life cycle and memory in the log** (iOS): the app going inactive, to the background and back, iOS's memory
   warnings and memory pressure (with the footprint iOS counts and what is left before the limit). iOS can end an app in
   the background or over its memory limit without a crash report; the log then shows what came last.
