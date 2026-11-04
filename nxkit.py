@@ -526,6 +526,7 @@ def rebuild_cmd(a):
     apply_patches(repo, info['game'])
     B, gamemod, pg, nacp = load_nxnative(repo)
     if info['derived'] and (work / 'profile' / info['game']).is_dir():
+        profile_keys(work / 'profile' / info['game'] / 'game.tsv', info['game'])   # (the game's profile.tsv as it is now, as prepare sets it)
         os.environ['DM_GAMES_DIR'] = games_dir(work / 'profile'); os.environ['DM_GAMES_FIRST'] = '1'
     g = gamemod.load(info['game'])
     out_dir = home / 'kits'; out_dir.mkdir(parents=True, exist_ok=True)

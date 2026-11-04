@@ -62,10 +62,10 @@ index dfc96781..2508d321 100644
  SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
  # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)
 diff --git a/dm/host/dm.h b/dm/host/dm.h
-index 4afbf96f..2686dc13 100644
+index 4afbf96f..9ffb69bb 100644
 --- a/dm/host/dm.h
 +++ b/dm/host/dm.h
-@@ -73,7 +73,10 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
+@@ -73,7 +73,11 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
  // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): read-only callbacks, called on a gate hit once attached
  // IDs 19 / 20 belonged to the removed movie request-ring workaround. Old rewritten modules may still contain them; without callbacks those gates are harmless passes through.
  enum { OBS_UE_MALLOC = 21,                                       // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
@@ -74,14 +74,15 @@ index 4afbf96f..2686dc13 100644
 +       OBS_MAX = 23 };
 +int dm_online(void);                    // Super Mario Maker 2's Course World (hle_smm2_online.c, nxkit): nifm and account answer as online
 +uint64_t dm_online_account_id(void);    // ... and the network service account id they give
++void dm_online_note(const char *what, int ok);   // ... logs the first call of each online function the game makes (with whether it was answered as success)
  void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
  int gate_obs_present(int id);
  uint64_t now_ns(void);
 diff --git a/dm/host/hle_account.c b/dm/host/hle_account.c
-index 18aac01f..4234d7f8 100644
+index 18aac01f..2adb82eb 100644
 --- a/dm/host/hle_account.c
 +++ b/dm/host/hle_account.c
-@@ -55,10 +55,22 @@ HLE_FORCE("_ZN2nn7account11GetNicknameEPNS0_8NicknameERKNS0_3UidE", "user nickna
+@@ -55,21 +55,41 @@ HLE_FORCE("_ZN2nn7account11GetNicknameEPNS0_8NicknameERKNS0_3UidE", "user nickna
  }
  
  // ---------- Online accounts: cut ----------
@@ -89,9 +90,10 @@ index 18aac01f..4234d7f8 100644
 -HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "network service account, out of scope; cut", Result, h_acc_GetNsaId, void *id, const UserHandle *h) { (void)id; (void)h; return RES_FAIL; }
 +// Super Mario Maker 2's Course World (dm_online, hle_smm2_online.c, nxkit): the player has a network service account whose ID token is ready.
 +// The token is a local placeholder (no Nintendo service is asked: the game's Course World requests are answered by the course server)
-+HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "network service account, out of scope; cut: always unavailable", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; return dm_online() ? RES_OK : RES_FAIL; }
++HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "network service account, out of scope; cut: always unavailable", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; dm_online_note("account::EnsureNetworkServiceAccountAvailable", dm_online()); return dm_online() ? RES_OK : RES_FAIL; }
 +HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "network service account, out of scope; cut", Result, h_acc_GetNsaId, void *id, const UserHandle *h) {
 +    (void)h; if (!dm_online()) return RES_FAIL;
++    dm_online_note("account::GetNetworkServiceAccountId", 1);
 +    if (id) *(uint64_t *)id = dm_online_account_id();
 +    return RES_OK;
 +}
@@ -103,59 +105,124 @@ index 18aac01f..4234d7f8 100644
 +    uint64_t k = sizeof tok - 1 < sz ? sizeof tok - 1 : sz;
 +    if (buf && sz) { memset(buf, 0, sz); memcpy(buf, tok, k); }
 +    if (n) *n = k;
++    dm_online_note("account::LoadNetworkServiceAccountIdTokenCache", 1);
 +    return RES_OK;
  }
  HLE_FORCE("_ZN2nn7account40ShowLicenseRequirementsForNetworkServiceERKNS0_10UserHandleE", "online membership notice applet, out of scope; cut", Result, h_acc_ShowLic, const UserHandle *h) { (void)h; return RES_FAIL; }
  // The Nintendo Account's cached profile (birthday, country): no Nintendo Account is linked on the host, so loading fails and the game skips its getters (Big Brain Academy: Brain vs. Brain, main+0xab8bc)
-@@ -67,9 +79,9 @@ HLE_FORCE("_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAc
+ HLE_FORCE("_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAccountInfoERKNS0_10UserHandleEPvm", "cached Nintendo Account info: none linked, fails", Result, h_acc_LoadNaInfo,
+-          void *info, const UserHandle *h, void *buf, uint64_t sz) { (void)info; (void)h; (void)buf; (void)sz; return RES_FAIL; }
++          void *info, const UserHandle *h, void *buf, uint64_t sz) {
++    (void)info; (void)h;
++    if (!dm_online()) return RES_FAIL;   // Super Mario Maker 2's Course World: loaded, with nothing in it (the work buffer zeroed, as the console's cache answer with empty buffers)
++    if (buf && sz) memset(buf, 0, sz);
++    dm_online_note("account::LoadCachedNintendoAccountInfo", 1);
++    return RES_OK;
++}
  
  // AsyncContext / NintendoAccountAuthorizationRequestContext: object contents are read and written only by the interfaces below; construction writes no memory, the completion event fires immediately, and the result is always failure
  HLE_FORCE("_ZN2nn7account12AsyncContextC1Ev", "async context constructor; the host creates no IPC object", void, h_acc_AcCtor, void *self) { (void)self; }
 -HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return RES_FAIL; }
-+HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return dm_online() ? RES_OK : RES_FAIL; }
++HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; dm_online_note("account::EnsureNetworkServiceAccountIdTokenCacheAsync", dm_online()); return dm_online() ? RES_OK : RES_FAIL; }
  HLE_FORCE("_ZN2nn7account12AsyncContext14GetSystemEventEPNS_2os11SystemEventE", "async completion event; fires immediately", Result, h_acc_AcGetEv, void *self, void *ev) { (void)self; hle_signal_system_event(ev); return RES_OK; }
 -HLE_FORCE("_ZN2nn7account12AsyncContext9GetResultEv", "async result; networking is cut, always fails", Result, h_acc_AcGetRes, void *self) { (void)self; return RES_FAIL; }
 +HLE_FORCE("_ZN2nn7account12AsyncContext9GetResultEv", "async result; networking is cut, always fails", Result, h_acc_AcGetRes, void *self) { (void)self; return dm_online() ? RES_OK : RES_FAIL; }
  HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContextC1Ev", "Nintendo Account authorization, out of scope; the constructor writes no memory", void, h_acc_NaCtor, void *self) { (void)self; }
  HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContextD1Ev", "Nintendo Account authorization, out of scope", void, h_acc_NaDtor, void *self) { (void)self; }
  HLE_FORCE("_ZN2nn7account41CreateNintendoAccountAuthorizationRequestEPNS0_42NintendoAccountAuthorizationRequestContextERKNS0_10UserHandleERKNS0_45NintendoAccountAuthorizationRequestParametersEPvm",
-@@ -105,7 +117,7 @@ HLE_FORCE("_ZN2nn7account27StoreSaveDataThumbnailImageERKNS0_3UidEPKvm", "save-d
+@@ -105,7 +125,7 @@ HLE_FORCE("_ZN2nn7account27StoreSaveDataThumbnailImageERKNS0_3UidEPKvm", "save-d
      (void)uid; (void)img; (void)n; return RES_OK;
  }
  HLE_FORCE("_ZN2nn7account28DeleteSaveDataThumbnailImageERKNS0_3UidE", "save-data thumbnail; the host keeps none", Result, h_acc_DeleteThumb, const Uid *uid) { (void)uid; return RES_OK; }
 -HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "network service account, out of scope; always unavailable", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = 0; return RES_OK; }
-+HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "network service account, out of scope; always unavailable", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = (uint8_t)dm_online(); return RES_OK; }
++HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "network service account, out of scope; always unavailable", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = (uint8_t)dm_online(); dm_online_note("account::IsNetworkServiceAccountAvailable", *out); return RES_OK; }
  HLE_FORCE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", "close user; the handle holds no session", void, h_acc_CloseUser, const UserHandle *h) { (void)h; }
  HLE_FORCE("_ZN2nn7account12AsyncContext6CancelEv", "async context cancel; no request", Result, h_acc_AcCancel, void *self) { (void)self; return RES_OK; }
  HLE_FORCE("_ZN2nn7account12AsyncContext7HasDoneEPb", "async context: always done", Result, h_acc_AcHasDone, void *self, uint8_t *done) { (void)self; *done = 1; return RES_OK; }
+diff --git a/dm/host/hle_friends.c b/dm/host/hle_friends.c
+index 7f41e6c3..09b9556d 100644
+--- a/dm/host/hle_friends.c
++++ b/dm/host/hle_friends.c
+@@ -58,9 +58,9 @@ HLE_FORCE("_ZN2nn7friends33ShowMethodsOfSendingFriendRequestERKNS_7account3UidE"
+ HLE_FORCE("_ZN2nn7friends18GetBlockedUserListEPiPNS_7account23NetworkServiceAccountIdERKNS2_3UidEii", "blocked user list is empty (cut)",
+           Result, h_fr_GetBlocked, int *count, void *out, const void *uid, int off, int n) { (void)out; (void)uid; (void)off; (void)n; if (count) *count = 0; return RES_FAIL; }
+ // Online play sessions (DRAGON QUEST XI S)
+-HLE_FORCE("_ZN2nn7friends28DeclareOpenOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_OpenSession, const void *uid) { (void)uid; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7friends29DeclareCloseOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_CloseSession, const void *uid) { (void)uid; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends28DeclareOpenOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_OpenSession, const void *uid) { (void)uid; if (dm_online()) { dm_online_note("friends::DeclareOpenOnlinePlaySession", 1); return RES_OK; } return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends29DeclareCloseOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_CloseSession, const void *uid) { (void)uid; if (dm_online()) { dm_online_note("friends::DeclareCloseOnlinePlaySession", 1); return RES_OK; } return RES_FAIL; }
+ // Presence
+-HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence unavailable (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence unavailable (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence unavailable (cut)", Result, h_fr_UpCommit, void *self) { (void)self; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence unavailable (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; if (dm_online()) { dm_online_note("friends::UserPresence::Initialize", 1); return RES_OK; } return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence unavailable (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; if (dm_online()) { dm_online_note("friends::UserPresence::SetDescription", 1); return RES_OK; } return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence unavailable (cut)", Result, h_fr_UpCommit, void *self) { (void)self; if (dm_online()) { dm_online_note("friends::UserPresence::Commit", 1); return RES_OK; } return RES_FAIL; }
+diff --git a/dm/host/hle_misc.c b/dm/host/hle_misc.c
+index 93a0f905..f8707101 100644
+--- a/dm/host/hle_misc.c
++++ b/dm/host/hle_misc.c
+@@ -154,8 +154,18 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", "profanity
+ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter8FinalizeEv", "profanity filter shutdown; the host mounted no word list", void, h_ngc_Fini, void *self) { (void)self; }
+ 
+ // ---------- nsd server name resolution / pctl free communication: networking, out of scope ----------
+-HLE_FORCE("_ZN2nn3nsd7ResolveEPNS0_4FqdnERKS1_", "server name resolution, networking out of scope; cut", Result, h_nsd_Resolve, void *out, const void *in) { (void)out; (void)in; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn3nsd9ResolveExEPNS0_4FqdnERKS1_", "server name resolution, networking out of scope; cut", Result, h_nsd_ResolveEx, void *out, const void *in) { (void)out; (void)in; return RES_FAIL; }
++HLE_FORCE("_ZN2nn3nsd7ResolveEPNS0_4FqdnERKS1_", "server name resolution, networking out of scope; cut", Result, h_nsd_Resolve, void *out, const void *in) {
++    if (!dm_online()) return RES_FAIL;   // Super Mario Maker 2's Course World: the name as it is (nn::nsd::Fqdn, char[0x100]; nothing connects to it)
++    if (out && in) { memcpy(out, in, 0x100); ((char *)out)[0xff] = 0; }
++    dm_online_note("nsd::Resolve ", 1);
++    return RES_OK;
++}
++HLE_FORCE("_ZN2nn3nsd9ResolveExEPNS0_4FqdnERKS1_", "server name resolution, networking out of scope; cut", Result, h_nsd_ResolveEx, void *out, const void *in) {
++    if (!dm_online()) return RES_FAIL;   // Super Mario Maker 2's Course World: the name as it is (nn::nsd::Fqdn, char[0x100]; nothing connects to it)
++    if (out && in) { memcpy(out, in, 0x100); ((char *)out)[0xff] = 0; }
++    dm_online_note("nsd::ResolveEx", 1);
++    return RES_OK;
++}
+ // bool arguments only look at the low 8 bits; returns bool
+ // The permission query answers as TryBegin / IsFreeCommunicationAvailable do: the SDK's version calls the pctl service (pctl::detail::ipc::GetService), which the host never opens (DRAGON QUEST XI S imports it; from PR #38)
+ HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "parental controls · permission to communicate with others, networking out of scope; never, no system UI", unsigned, h_pctl_CheckFree, unsigned show_ui) { (void)show_ui; return 0; }
 diff --git a/dm/host/hle_net.c b/dm/host/hle_net.c
-index 16b70adc..70e31466 100644
+index 16b70adc..cfe413be 100644
 --- a/dm/host/hle_net.c
 +++ b/dm/host/hle_net.c
-@@ -18,9 +18,9 @@ HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "offline: on hold until 50 ms
+@@ -18,10 +18,15 @@ HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "offline: on hold until 50 ms
      uint64_t t = atomic_load(&g_nifm_submit);
      return t && now_ns() - t < NIFM_HOLD_NS;
  }
 -HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable", int, h_nifm_Available, void) { return 0; }
 -HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { return RES_FAIL; }
 -HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "offline: no IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
-+HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable (Super Mario Maker 2's Course World: available, dm_online)", int, h_nifm_Available, void) { return dm_online(); }
-+HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { return dm_online() ? RES_OK : RES_FAIL; }
+-HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "offline: no proxy setting", Result, h_nifm_GetProxy, void *p) { (void)p; return RES_FAIL; }
++HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable (Super Mario Maker 2's Course World: available, dm_online)", int, h_nifm_Available, void) { int on = dm_online(); dm_online_note("nifm::IsNetworkAvailable", on); return on; }
++HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { dm_online_note("nifm::HandleNetworkRequestErrorResult", dm_online()); return dm_online() ? RES_OK : RES_FAIL; }
 +HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "offline: no IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = dm_online() ? 0x0100007fu : 0; return dm_online() ? RES_OK : RES_FAIL; }
- HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "offline: no proxy setting", Result, h_nifm_GetProxy, void *p) { (void)p; return RES_FAIL; }
++HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "offline: no proxy setting", Result, h_nifm_GetProxy, void *p) {
++    if (!dm_online()) return RES_FAIL;
++    if (p) memset(p, 0, 0xaa);   // Super Mario Maker 2's Course World: no proxy (nn::nifm::ProxySetting, 0xaa bytes: enabled, port, server, authentication)
++    dm_online_note("nifm::GetCurrentProxySetting", 1);
++    return RES_OK;
++}
  HLE_FORCE("nnsslInitialize", "connects to the ssl service; the network library's global init needs it to succeed, offline creates no session (cut)", Result, h_ssl_Initialize, void) { return RES_OK; }
  HLE_FORCE("nnsslFinalize", "pairs with nnsslInitialize (cut)", Result, h_ssl_Finalize, void) { return RES_OK; }
+ 
 diff --git a/dm/host/hle_offline.c b/dm/host/hle_offline.c
-index f1101ad0..db12cbce 100644
+index f1101ad0..8f2ae8fa 100644
 --- a/dm/host/hle_offline.c
 +++ b/dm/host/hle_offline.c
-@@ -111,13 +111,15 @@ HLE_FORCE("_ZN2nn3ssl14BuiltInManager22GetBuiltInCertificatesEPPNS0_26BuiltInCer
- HLE_FORCE("_ZN2nn4nifm19SetLocalNetworkModeEb", "offline: the local network mode switch is ignored", void, h_nifm_LocalMode, unsigned on) { (void)on; }
- HLE_FORCE("_ZN2nn4nifm27SubmitNetworkRequestAndWaitEv", "offline: the network request is not submitted (returns at once, IsNetworkAvailable is always false)", void, h_nifm_SubmitWait, void) {}
+@@ -108,16 +108,18 @@ HLE_FORCE("_ZN2nn3ssl14BuiltInManager22GetBuiltInCertificatesEPPNS0_26BuiltInCer
+           void **out, uint8_t *buf, unsigned bn, void *ids, unsigned n) { (void)buf; (void)bn; (void)ids; (void)n; if (out) *out = NULL; return RES_FAIL; }
+ 
+ // ---------- nifm / nsd: offline ----------
+-HLE_FORCE("_ZN2nn4nifm19SetLocalNetworkModeEb", "offline: the local network mode switch is ignored", void, h_nifm_LocalMode, unsigned on) { (void)on; }
+-HLE_FORCE("_ZN2nn4nifm27SubmitNetworkRequestAndWaitEv", "offline: the network request is not submitted (returns at once, IsNetworkAvailable is always false)", void, h_nifm_SubmitWait, void) {}
++HLE_FORCE("_ZN2nn4nifm19SetLocalNetworkModeEb", "offline: the local network mode switch is ignored", void, h_nifm_LocalMode, unsigned on) { (void)on; if (dm_online()) dm_online_note("nifm::SetLocalNetworkMode", 1); }
++HLE_FORCE("_ZN2nn4nifm27SubmitNetworkRequestAndWaitEv", "offline: the network request is not submitted (returns at once, IsNetworkAvailable is always false)", void, h_nifm_SubmitWait, void) { if (dm_online()) dm_online_note("nifm::SubmitNetworkRequestAndWait", 1); }
  HLE_FORCE("_ZN2nn4nifm22GetCurrentIpConfigInfoEP7in_addrS2_S2_S2_S2_", "offline: no IP configuration", Result, h_nifm_IpCfg, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d, uint32_t *e) {
 -    uint32_t *p[5] = {a, b, c, d, e}; for (int i = 0; i < 5; i++) if (p[i]) *p[i] = 0; return RES_FAIL;
 +    uint32_t *p[5] = {a, b, c, d, e}; for (int i = 0; i < 5; i++) if (p[i]) *p[i] = 0;
-+    if (dm_online()) { if (a) *a = 0x0100007fu; if (b) *b = 0x00ffffffu; if (c) *c = 0x0100007fu; return RES_OK; }   // Super Mario Maker 2's Course World: the loopback address
++    if (dm_online()) { if (a) *a = 0x0100007fu; if (b) *b = 0x00ffffffu; if (c) *c = 0x0100007fu; dm_online_note("nifm::GetCurrentIpConfigInfo", 1); return RES_OK; }   // Super Mario Maker 2's Course World: the loopback address
 +    return RES_FAIL;
  }
  // SDK 10's functions of the same name take socket::InAddr / in_addr, exactly the other way round from the generation above and in hle_net.c (Super Mario 3D World + Bowser's Fury)
@@ -169,10 +236,10 @@ index f1101ad0..db12cbce 100644
  
 diff --git a/dm/host/hle_smm2_online.c b/dm/host/hle_smm2_online.c
 new file mode 100644
-index 00000000..85bf3c2c
+index 00000000..e53685e8
 --- /dev/null
 +++ b/dm/host/hle_smm2_online.c
-@@ -0,0 +1,896 @@
+@@ -0,0 +1,909 @@
 +// Super Mario Maker 2 3.0.3 (main c2dc405a…): Course World without Nintendo's servers (nxkit, patches/01009B90006DC000/0020).
 +//
 +// The game's Course World request functions ("wrappers": this = the network-session object, NetObj) are cut in the game's patches.py
@@ -1053,6 +1120,17 @@ index 00000000..85bf3c2c
 +int dm_online(void) { pthread_once(&g_once, init); return g_on; }
 +uint64_t dm_online_account_id(void) { return OWN_PID; }
 +
++// The first call of each online function the game makes, logged with how it was answered: where Course World stops, if it does
++void dm_online_note(const char *what, int ok) {
++    static const char *seen[64]; static int n; static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
++    pthread_mutex_lock(&m);
++    int i = 0;
++    while (i < n && seen[i] != what) i++;
++    if (i == n && n < 64) seen[n++] = what;
++    pthread_mutex_unlock(&m);
++    if (i == n - 1 || i == 64) LOG("smm2 online: the game called %s (%s)", what, ok ? "answered: success" : "answered: failure");
++}
++
 +// svc #0x8f, cut at the entry of each wrapper (patches.py): orig = its main offset
 +uint64_t smm2_svc(uint64_t *regs, uint64_t orig) {
 +    dm_online();
@@ -1062,7 +1140,9 @@ index 00000000..85bf3c2c
 +            if (k_wrappers[i].fn != w_login_ready && k_wrappers[i].fn != w_login) { s32(regs[0] + 0x60, 1); regs[0] = g8(M(G_FAIL_BYTE)); }
 +            return 0;
 +        }
-+        SLOG("%s", k_wrappers[i].what);
++        static uint64_t called[64];   // (the first call of each wrapper is logged even without DM_SMM2_LOG)
++        if (i < 64 && !called[i]++) LOG("smm2 online: Course World request %s (main+%#llx)", k_wrappers[i].what, (unsigned long long)orig);
++        else SLOG("%s", k_wrappers[i].what);
 +        k_wrappers[i].fn(regs);
 +        return 0;
 +    }

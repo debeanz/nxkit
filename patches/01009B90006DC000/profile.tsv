@@ -2,5 +2,6 @@
 # From nxnative issue #865 (a Mac bring-up of 3.0.3): without render_cond the picture stays black with sound; without shader_key_skip 21 of the
 # game's runtime shaders are not in the map (its controls differ only in GLSLC's compile information at +0x7d0..+0x7e7). shader_key_skip is
 # backported to nxnative 2db12f7 by 0018-smm2-nested-zstd-font-key-skip.patch.
+op_mode	handheld
 render_cond	on
 shader_key_skip	0x7d0+0x18
