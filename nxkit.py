@@ -87,6 +87,7 @@ def checkout(home, ref=None):
     for p in sorted((HERE / 'patches').rglob('*.patch')):   # files a patch creates (any game's) are untracked, so the reset leaves them: removed, or the patch would not apply again
         for m in re.finditer(r'^--- /dev/null\n\+\+\+ b/(\S+)', p.read_text(encoding='utf-8').replace('\r\n', '\n'), re.M):
             (repo / m.group(1)).unlink(missing_ok=True)
+    _APPLIED.clear()   # the reset took them out
     apply_patches(repo)   # the general patches, as on the Mac: the PC steps (the shader split) need the Windows fixes; the game's own come once prepare knows the game
     return repo, commit
 
@@ -326,12 +327,18 @@ def patch_files(game=None):
     return ps + (sorted((HERE / 'patches' / game).glob('*.patch')) if game else [])
 
 
+_APPLIED = set()   # the patches this run applied since the last reset of the checkout
+
+
 def apply_patches(repo, game=None):
-    """The general patches and, with game, that game's own, applied on the PC (checkout, prepare, rebuild) and on the Mac (build) alike"""
+    """The general patches and, with game, that game's own, applied on the PC (checkout, prepare, rebuild) and on the Mac (build) alike. A patch this run applied already is not looked at
+    again: a later patch may have changed the lines around it, so the reverse check below no longer recognizes it and it would be applied a second time (0022 after 0024)"""
     for p in patch_files(game):
-        if subprocess.run(['git', '-C', repo, 'apply', '--reverse', '--check', p], capture_output=True).returncode == 0: continue   # already applied
+        if p in _APPLIED: continue
+        if subprocess.run(['git', '-C', repo, 'apply', '--reverse', '--check', p], capture_output=True).returncode == 0: _APPLIED.add(p); continue   # already applied
         r = subprocess.run(['git', '-C', repo, 'apply', p], capture_output=True, text=True)
         if r.returncode: raise KitError(f'{p.relative_to(HERE / "patches").as_posix()} does not apply to this nxnative commit: {r.stderr.strip()[-300:]}')
+        _APPLIED.add(p)
         say(f'applied {p.relative_to(HERE / "patches").as_posix()}')
 
 
