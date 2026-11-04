@@ -362,6 +362,16 @@ def build(repo, kit_dir, out_ipa):
                        DM_LANG=meta['language'], DM_SHOW_FPS='1' if meta['show_fps'] else '0')
         if meta['app_version']: ipa_env['DM_APP_VERSION'] = meta['app_version']
         if meta['icon']: ipa_env['DM_ICON'] = str(kit / 'game/icon.jpg')
+        hook = HERE / 'patches' / meta['game'] / 'mac_build.sh'   # a game's own Mac step before the app (Super Mario Maker 2: its course server library): prints CFLAGS= / LDFLAGS= lines
+        if hook.is_file():
+            B.PROG.stage('game build step')
+            with open(logs / 'mac_build.log', 'w') as lf:
+                r = subprocess.run(['bash', hook, work], stdout=subprocess.PIPE, stderr=lf, text=True, env=env)
+            if r.returncode: raise KitError(f'patches/{meta["game"]}/mac_build.sh failed (see {logs / "mac_build.log"})')
+            for line in r.stdout.splitlines():
+                k, _, v = line.partition('=')
+                if k in ('CFLAGS', 'LDFLAGS'): ipa_env[f'DM_EXTRA_{k}'] = v; say(f'{hook.name}: {k} {v}')
+            B.PROG.end()
         B.PROG.stage('app build')
         B.run(['bash', repo / 'dm/ios/tools/build_ipa.sh', out_ipa], logs / 'build_ipa.log', env=ipa_env)
         B.PROG.end(f'{out_ipa.stat().st_size / 2 ** 20:.0f} MB')

@@ -141,6 +141,16 @@ Super Mario Maker 2 (`patches/01009B90006DC000`, testing; nxnative has no profil
     picture with sound without it) and `shader_key_skip 0x7d0+0x18` (runtime shaders whose controls differ only in GLSLC's compile
     information). `shader_key_skip` is backported from a newer nxnative (d8bc9210).
 - Still open upstream: an intermittent crash around `nvnCommandBufferEndRecording`, seen on the Mac before the shader set was complete.
+- **Course World without Nintendo's servers** (0020, testing): Course World's request functions are cut to host code
+  (`dm/host/hle_smm2_online.c`), which answers them from a course server inside the app:
+  [smm2recomp](https://github.com/smm2recomp/smm2recomp)'s (GPL-3.0), built for iOS on the Mac by
+  `patches/01009B90006DC000/mac_build.sh`, serving [TGRCode](https://tgrcode.com/mm2)'s public course archive. nifm and
+  account answer as online for this game only. The request functions, structure offsets and game functions called back
+  are smm2recomp's findings for 3.0.3. Covered: the login, the course lists (Hot, Popular, New, Detailed Search, a maker's
+  courses), search by course ID, makers, playing and downloading courses (to the Coursebot), course pictures. Not covered:
+  Endless Challenge, Super Worlds, uploads, comments, leaderboards, multiplayer. `env.txt`: `DM_SMM2_ONLINE=0` turns it off,
+  `DM_SMM2_LOG=1` logs every request, `DM_SMM2_SERVER=<ip>:<port>` / `DM_SMM2_TOKEN` use another course server.
+  A game's `patches/<title ID>/mac_build.sh` runs on the Mac before the app build and may print `CFLAGS=` / `LDFLAGS=` lines.
 
 A game's `patches/<title ID>/profile.tsv` (key, tab, value) sets those keys in a provisional or derived profile's `game.tsv`.
 

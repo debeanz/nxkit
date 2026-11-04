@@ -1,0 +1,1096 @@
+diff --git a/dm/games/01009B90006DC000/patches.py b/dm/games/01009B90006DC000/patches.py
+new file mode 100644
+index 00000000..d6114213
+--- /dev/null
++++ b/dm/games/01009B90006DC000/patches.py
+@@ -0,0 +1,44 @@
++# Super Mario Maker 2 (01009B90006DC000): the rewriter's patches of its 3.0.3 main (nxkit, patches/01009B90006DC000/0020; dm/tools/patch_nso.py loads every profile's patches.py).
++# Course World without Nintendo's servers: each request function ("wrapper", x0 = the network-session object) starts with svc #0x8f; ret, so the call is answered by the host
++# (hle_svc.c -> hle_smm2_online.c smm2_svc, by this offset) from the course server in the app. The functions are smm2recomp's findings (github.com/smm2recomp/smm2recomp).
++CUTS = {
++  'c2dc405ac414c37c8b1c50219c7a0f0c': [
++    (0x60fe20, 'ff8301d1f71300f9', 'e11100d4c0035fd6', 'enl session cLogInReady: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x6101d0, 'f44fbea9fd7b01a9', 'e11100d4c0035fd6', 'enl session cLogIn: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ce2f0, 'ff8304d1fc570fa9', 'e11100d4c0035fd6', 'GetApplicationConfig: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d5cd0, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'GetUsers (the player): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f2cc0, 'ff8304d1fc7b00f9', 'e11100d4c0035fd6', 'GetUserNameNgType: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14cef40, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'SyncUserProfile: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d8360, 'ff8304d1fc570fa9', 'e11100d4c0035fd6', 'GetMiiClothes: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d7d20, 'ff0304d1f37300f9', 'e11100d4c0035fd6', 'LoginCheck: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d7e00, 'ff4304d1fc4f0fa9', 'e11100d4c0035fd6', 'UpdateLastLoginInfo: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f0b30, 'ff4307d1fc5f19a9', 'e11100d4c0035fd6', 'PostActivityQuest: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14edee0, 'ff8304d1fc7b00f9', 'e11100d4c0035fd6', 'GetNewNotification: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f3ab0, 'ff0305d1fc5f10a9', 'e11100d4c0035fd6', 'GetEventCourseStatus: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f3980, 'ff4304d1fc7300f9', 'e11100d4c0035fd6', 'GetEventCourseCount: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f3770, 'ff0305d1fc5f10a9', 'e11100d4c0035fd6', 'GetEventCourses: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d8550, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'SearchCourses: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14dc0d0, 'fc0f1af8fa6701a9', 'e11100d4c0035fd6', 'GetUserOrCourse: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d02d0, 'ff8306d1fc6715a9', 'e11100d4c0035fd6', 'GetUsers (listed players): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d7780, 'ff8306d1fc6715a9', 'e11100d4c0035fd6', 'GetUsers (listed players, 2): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d2f00, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'GetUsers (a maker page): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14d74a0, 'ff0306d1fc5715a9', 'e11100d4c0035fd6', 'GetUsers (counts): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14dbae0, 'ff4306d1fca300f9', 'e11100d4c0035fd6', 'GetCourses: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14de010, 'ff4306d1fc5f15a9', 'e11100d4c0035fd6', 'GetObject (a course file): svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14e0e70, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'course pictures: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ec0d0, 'ff8304d1fc570fa9', 'e11100d4c0035fd6', 'course records: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f17a0, 'ffc304d1fc5f0fa9', 'e11100d4c0035fd6', 'id check: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14e8ec0, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'SearchComments: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14e30e0, 'fc6fbaa9fa6701a9', 'e11100d4c0035fd6', 'PostPlayResult: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14ebc60, 'ff8306d1fc5f16a9', 'e11100d4c0035fd6', 'CanPostRatingAndComment: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14e6b90, 'ff0305d1fc8300f9', 'e11100d4c0035fd6', 'PostRatingInfo: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++    (0x14f2910, 'fc5fbca9f65701a9', 'e11100d4c0035fd6', 'ReportFromBugDetection: svc #0x8f; ret (answered by hle_smm2_online.c)'),
++  ],
++}
++# cDownload's exec (a course's Download to the Coursebot): an observation gate at its entry, OBS_SMM2_DOWNLOAD (22): a Download waiting on a picture that failed
++# with the list gets it again (hle_smm2_online.c obs_download)
++OBS = {
++  'c2dc405ac414c37c8b1c50219c7a0f0c': [
++    (0x17661f0, 22, 'f81d0ff5', 'cDownload exec entry: str x21, [sp, #-0x30]! (position independent)'),
++  ],
++}
+diff --git a/dm/host/Makefile b/dm/host/Makefile
+index dfc96781..2508d321 100644
+--- a/dm/host/Makefile
++++ b/dm/host/Makefile
+@@ -14,7 +14,7 @@ $(error no game profile $(GAME) (neither in dm/games nor in DM_GAMES_DIR))
+ endif
+ endif
+ GAME_H = gen/$(GAME)/game_profile.h
+-CFLAGS=-O1 -g -Wall -Wno-unused-function
++CFLAGS=-O1 -g -Wall -Wno-unused-function $(DM_EXTRA_CFLAGS)   # DM_EXTRA_CFLAGS: a game's own build switches (nxkit: Super Mario Maker 2's DM_SMM2_EMBED)
+ # Service-layer takeover hle_*.c files are included by wildcard: adding a file does not touch this line (avoids merge conflicts)
+ SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
+ # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)
+diff --git a/dm/host/dm.h b/dm/host/dm.h
+index 4afbf96f..2686dc13 100644
+--- a/dm/host/dm.h
++++ b/dm/host/dm.h
+@@ -73,7 +73,10 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
+ // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): read-only callbacks, called on a gate hit once attached
+ // IDs 19 / 20 belonged to the removed movie request-ring workaround. Old rewritten modules may still contain them; without callbacks those gates are harmless passes through.
+ enum { OBS_UE_MALLOC = 21,                                       // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
+-       OBS_MAX = 22 };
++       OBS_SMM2_DOWNLOAD = 22,                                     // Super Mario Maker 2 3.0.3: cDownload's exec, a Download waiting for its picture (hle_smm2_online.c, nxkit)
++       OBS_MAX = 23 };
++int dm_online(void);                    // Super Mario Maker 2's Course World (hle_smm2_online.c, nxkit): nifm and account answer as online
++uint64_t dm_online_account_id(void);    // ... and the network service account id they give
+ void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
+ int gate_obs_present(int id);
+ uint64_t now_ns(void);
+diff --git a/dm/host/hle_account.c b/dm/host/hle_account.c
+index 18aac01f..4234d7f8 100644
+--- a/dm/host/hle_account.c
++++ b/dm/host/hle_account.c
+@@ -55,10 +55,22 @@ HLE_FORCE("_ZN2nn7account11GetNicknameEPNS0_8NicknameERKNS0_3UidE", "user nickna
+ }
+ 
+ // ---------- Online accounts: cut ----------
+-HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "network service account, out of scope; cut: always unavailable", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "network service account, out of scope; cut", Result, h_acc_GetNsaId, void *id, const UserHandle *h) { (void)id; (void)h; return RES_FAIL; }
++// Super Mario Maker 2's Course World (dm_online, hle_smm2_online.c, nxkit): the player has a network service account whose ID token is ready.
++// The token is a local placeholder (no Nintendo service is asked: the game's Course World requests are answered by the course server)
++HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "network service account, out of scope; cut: always unavailable", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; return dm_online() ? RES_OK : RES_FAIL; }
++HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "network service account, out of scope; cut", Result, h_acc_GetNsaId, void *id, const UserHandle *h) {
++    (void)h; if (!dm_online()) return RES_FAIL;
++    if (id) *(uint64_t *)id = dm_online_account_id();
++    return RES_OK;
++}
+ HLE_FORCE("_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_LoadTok, uint64_t *n, char *buf, uint64_t sz, const UserHandle *h) {
+-    (void)buf; (void)sz; (void)h; if (n) *n = 0; return RES_FAIL;
++    (void)h;
++    if (!dm_online()) { if (n) *n = 0; return RES_FAIL; }
++    static const char tok[] = "nxkit-local-placeholder-token";
++    uint64_t k = sizeof tok - 1 < sz ? sizeof tok - 1 : sz;
++    if (buf && sz) { memset(buf, 0, sz); memcpy(buf, tok, k); }
++    if (n) *n = k;
++    return RES_OK;
+ }
+ HLE_FORCE("_ZN2nn7account40ShowLicenseRequirementsForNetworkServiceERKNS0_10UserHandleE", "online membership notice applet, out of scope; cut", Result, h_acc_ShowLic, const UserHandle *h) { (void)h; return RES_FAIL; }
+ // The Nintendo Account's cached profile (birthday, country): no Nintendo Account is linked on the host, so loading fails and the game skips its getters (Big Brain Academy: Brain vs. Brain, main+0xab8bc)
+@@ -67,9 +79,9 @@ HLE_FORCE("_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAc
+ 
+ // AsyncContext / NintendoAccountAuthorizationRequestContext: object contents are read and written only by the interfaces below; construction writes no memory, the completion event fires immediately, and the result is always failure
+ HLE_FORCE("_ZN2nn7account12AsyncContextC1Ev", "async context constructor; the host creates no IPC object", void, h_acc_AcCtor, void *self) { (void)self; }
+-HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "network service account token, out of scope; cut", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return dm_online() ? RES_OK : RES_FAIL; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext14GetSystemEventEPNS_2os11SystemEventE", "async completion event; fires immediately", Result, h_acc_AcGetEv, void *self, void *ev) { (void)self; hle_signal_system_event(ev); return RES_OK; }
+-HLE_FORCE("_ZN2nn7account12AsyncContext9GetResultEv", "async result; networking is cut, always fails", Result, h_acc_AcGetRes, void *self) { (void)self; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7account12AsyncContext9GetResultEv", "async result; networking is cut, always fails", Result, h_acc_AcGetRes, void *self) { (void)self; return dm_online() ? RES_OK : RES_FAIL; }
+ HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContextC1Ev", "Nintendo Account authorization, out of scope; the constructor writes no memory", void, h_acc_NaCtor, void *self) { (void)self; }
+ HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContextD1Ev", "Nintendo Account authorization, out of scope", void, h_acc_NaDtor, void *self) { (void)self; }
+ HLE_FORCE("_ZN2nn7account41CreateNintendoAccountAuthorizationRequestEPNS0_42NintendoAccountAuthorizationRequestContextERKNS0_10UserHandleERKNS0_45NintendoAccountAuthorizationRequestParametersEPvm",
+@@ -105,7 +117,7 @@ HLE_FORCE("_ZN2nn7account27StoreSaveDataThumbnailImageERKNS0_3UidEPKvm", "save-d
+     (void)uid; (void)img; (void)n; return RES_OK;
+ }
+ HLE_FORCE("_ZN2nn7account28DeleteSaveDataThumbnailImageERKNS0_3UidE", "save-data thumbnail; the host keeps none", Result, h_acc_DeleteThumb, const Uid *uid) { (void)uid; return RES_OK; }
+-HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "network service account, out of scope; always unavailable", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = 0; return RES_OK; }
++HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "network service account, out of scope; always unavailable", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = (uint8_t)dm_online(); return RES_OK; }
+ HLE_FORCE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", "close user; the handle holds no session", void, h_acc_CloseUser, const UserHandle *h) { (void)h; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext6CancelEv", "async context cancel; no request", Result, h_acc_AcCancel, void *self) { (void)self; return RES_OK; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext7HasDoneEPb", "async context: always done", Result, h_acc_AcHasDone, void *self, uint8_t *done) { (void)self; *done = 1; return RES_OK; }
+diff --git a/dm/host/hle_net.c b/dm/host/hle_net.c
+index 16b70adc..70e31466 100644
+--- a/dm/host/hle_net.c
++++ b/dm/host/hle_net.c
+@@ -18,9 +18,9 @@ HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "offline: on hold until 50 ms
+     uint64_t t = atomic_load(&g_nifm_submit);
+     return t && now_ns() - t < NIFM_HOLD_NS;
+ }
+-HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable", int, h_nifm_Available, void) { return 0; }
+-HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { return RES_FAIL; }
+-HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "offline: no IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
++HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable (Super Mario Maker 2's Course World: available, dm_online)", int, h_nifm_Available, void) { return dm_online(); }
++HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { return dm_online() ? RES_OK : RES_FAIL; }
++HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "offline: no IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = dm_online() ? 0x0100007fu : 0; return dm_online() ? RES_OK : RES_FAIL; }
+ HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "offline: no proxy setting", Result, h_nifm_GetProxy, void *p) { (void)p; return RES_FAIL; }
+ HLE_FORCE("nnsslInitialize", "connects to the ssl service; the network library's global init needs it to succeed, offline creates no session (cut)", Result, h_ssl_Initialize, void) { return RES_OK; }
+ HLE_FORCE("nnsslFinalize", "pairs with nnsslInitialize (cut)", Result, h_ssl_Finalize, void) { return RES_OK; }
+diff --git a/dm/host/hle_offline.c b/dm/host/hle_offline.c
+index f1101ad0..db12cbce 100644
+--- a/dm/host/hle_offline.c
++++ b/dm/host/hle_offline.c
+@@ -111,13 +111,15 @@ HLE_FORCE("_ZN2nn3ssl14BuiltInManager22GetBuiltInCertificatesEPPNS0_26BuiltInCer
+ HLE_FORCE("_ZN2nn4nifm19SetLocalNetworkModeEb", "offline: the local network mode switch is ignored", void, h_nifm_LocalMode, unsigned on) { (void)on; }
+ HLE_FORCE("_ZN2nn4nifm27SubmitNetworkRequestAndWaitEv", "offline: the network request is not submitted (returns at once, IsNetworkAvailable is always false)", void, h_nifm_SubmitWait, void) {}
+ HLE_FORCE("_ZN2nn4nifm22GetCurrentIpConfigInfoEP7in_addrS2_S2_S2_S2_", "offline: no IP configuration", Result, h_nifm_IpCfg, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d, uint32_t *e) {
+-    uint32_t *p[5] = {a, b, c, d, e}; for (int i = 0; i < 5; i++) if (p[i]) *p[i] = 0; return RES_FAIL;
++    uint32_t *p[5] = {a, b, c, d, e}; for (int i = 0; i < 5; i++) if (p[i]) *p[i] = 0;
++    if (dm_online()) { if (a) *a = 0x0100007fu; if (b) *b = 0x00ffffffu; if (c) *c = 0x0100007fu; return RES_OK; }   // Super Mario Maker 2's Course World: the loopback address
++    return RES_FAIL;
+ }
+ // SDK 10's functions of the same name take socket::InAddr / in_addr, exactly the other way round from the generation above and in hle_net.c (Super Mario 3D World + Bowser's Fury)
+ HLE_FORCE("_ZN2nn4nifm22GetCurrentIpConfigInfoEPNS_6socket6InAddrES3_S3_S3_S3_", "offline: no IP configuration (SDK 10 overload)", Result, h_nifm_IpCfg10, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d, uint32_t *e) {
+     uint32_t *p[5] = {a, b, c, d, e}; for (int i = 0; i < 5; i++) if (p[i]) *p[i] = 0; return RES_FAIL;
+ }
+-HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "offline: no IP (SDK 10 overload)", Result, h_nifm_GetIp10, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
++HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "offline: no IP (SDK 10 overload)", Result, h_nifm_GetIp10, uint32_t *a) { if (a) *a = dm_online() ? 0x0100007fu : 0; return dm_online() ? RES_OK : RES_FAIL; }
+ // EnvironmentIdentifier = char[8]: retail environment "lp1"
+ HLE_FORCE("_ZN2nn3nsd24GetEnvironmentIdentifierEPNS0_21EnvironmentIdentifierE", "server environment name: retail lp1", void, h_nsd_EnvId, char *out) { memset(out, 0, 8); memcpy(out, "lp1", 3); }
+ 
+diff --git a/dm/host/hle_smm2_online.c b/dm/host/hle_smm2_online.c
+new file mode 100644
+index 00000000..85bf3c2c
+--- /dev/null
++++ b/dm/host/hle_smm2_online.c
+@@ -0,0 +1,896 @@
++// Super Mario Maker 2 3.0.3 (main c2dc405a…): Course World without Nintendo's servers (nxkit, patches/01009B90006DC000/0020).
++//
++// The game's Course World request functions ("wrappers": this = the network-session object, NetObj) are cut in the game's patches.py
++// to `svc #0x8f; ret`, so each call lands in smm2_svc below (hle_svc.c), which answers it the way the game's own converters would have
++// from a NEX answer and returns the byte the wrappers return for success or failure. The answers come from a course server on the
++// device: smm2recomp's (github.com/smm2recomp/smm2recomp, core/crates/embed, GPL-3.0), linked into the app when the build has it
++// (DM_SMM2_EMBED: nxkit's mac_build.sh builds it for iOS), which serves TGRCode's public course archive (tgrcode.com/mm2) at
++// 127.0.0.1. The structure offsets, the request functions and the game functions called back (the lock, the session's state change, the
++// course encryption, the thumbnail signing) are smm2recomp's findings for 3.0.3 (recomp/games/smm2/mods); this file is nxkit's own code.
++//
++// What it covers: Course World's login (no NEX connection), the course lists (Hot, Popular, New, Detailed Search, a maker's courses),
++// search by course ID, the makers on the lists, course downloads (play from the course page, Download to the Coursebot) and the
++// course pictures. Not covered (the game's own code answers "not connected"): the Endless Challenge, Super Worlds, uploads, comments,
++// leaderboards, Ninji Speedruns, multiplayer.
++//
++// Settings (Documents/env.txt): DM_SMM2_ONLINE=0 turns it off (the game is offline again); DM_SMM2_SERVER=<ip>:<port> and
++// DM_SMM2_TOKEN=<token> use a course server elsewhere instead of the one in the app; DM_SMM2_LOG=1 logs every request.
++#include "hle.h"
++#include <arpa/inet.h>
++#include <ctype.h>
++#include <errno.h>
++#include <netinet/in.h>
++#include <pthread.h>
++#include <stdatomic.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/time.h>
++#include <time.h>
++#include <unistd.h>
++
++#if DM_SMM2_EMBED
++uint16_t mmk_embed_start(const char *dir, const char *upstream, const uint8_t *image, size_t image_len, const char *name, char *token_out, size_t token_cap);
++#endif
++
++#define SMM2_BUILD "c2dc405ac414c37c8b1c50219c7a0f0c"
++#define OWN_PID 0x1234567890abcdefull   // the network service account id the host gives the player (hle_account.c), also their player id in the answers
++
++static uint8_t *g_main;            // main's base
++static uint64_t g_ro_off, g_data_off;
++static int g_on, g_log;
++static pthread_once_t g_once = PTHREAD_ONCE_INIT;
++
++#define SLOG(...) do { if (g_log) LOG("smm2 online: " __VA_ARGS__); } while (0)
++
++// ---- game memory (guest addresses are host addresses)
++#define M(off) ((uint64_t)(uintptr_t)g_main + (uint64_t)(off))
++static inline uint8_t g8(uint64_t a) { return *(volatile uint8_t *)(uintptr_t)a; }
++static inline uint32_t g32(uint64_t a) { return *(volatile uint32_t *)(uintptr_t)a; }
++static inline uint64_t g64(uint64_t a) { return *(volatile uint64_t *)(uintptr_t)a; }
++static inline void s8(uint64_t a, uint8_t v) { *(volatile uint8_t *)(uintptr_t)a = v; }
++static inline void s16(uint64_t a, uint16_t v) { *(volatile uint16_t *)(uintptr_t)a = v; }
++static inline void s32(uint64_t a, uint32_t v) { *(volatile uint32_t *)(uintptr_t)a = v; }
++static inline void s64(uint64_t a, uint64_t v) { *(volatile uint64_t *)(uintptr_t)a = v; }
++
++// A game function at a main offset, called on this (guest) thread; unused arguments are harmless in the AAPCS64
++typedef uint64_t (*game_fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
++static uint64_t game_call(uint64_t off, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
++    return ((game_fn)(uintptr_t)M(off))(a, b, c, d, e, f);
++}
++
++#define F_LOCK 0x292410          // the wrappers' lock / unlock (x0: NetObj + 0x20)
++#define F_UNLOCK 0x292430
++#define F_STATE_CHANGE 0x8b9320  // (state machine, new state)
++#define F_ENCRYPT 0x8b3070       // the course encryption (key table holder, crypto block out, size, encrypted out, plain in)
++#define K_COURSE_KEYS 0x23d68c0  // its key table
++#define F_RNG_INIT 0x29a050      // thumbnail signing: (state)
++#define F_RNG_SEEDS 0x29a1c0     // (state, &w0, &w1, &w2, &w3)
++#define F_THUMB_KEY 0x168c6d0    // (&table, key out[16], state)
++#define K_THUMB_KEYS 0x23d6ed0
++#define F_HMAC 0x1cba7f0         // nn::crypto::GenerateHmacSha256Mac(mac, 32, data, size, key, 16)
++#define F_THUMB_CACHE_PUT 0x14b55b0   // (profile, block, data id)
++#define G_PROFILE 0x2c115e0
++#define G_OK_BYTE 0x2a17ad8      // the bytes the wrappers return: success, failure
++#define G_FAIL_BYTE 0x2a17ad9
++#define G_SETTINGS 0x2a57d60     // the player's settings: +0x2b0 the Maker avatar's name (UTF-16)
++#define G_USER_SETTINGS 0x2a39088   // *(...) +0x20: the save's user settings, CharInfo at +0x60
++
++static void lock(uint64_t no) { game_call(F_LOCK, no + 0x20, 0, 0, 0, 0, 0); }
++static void unlock(uint64_t no) { game_call(F_UNLOCK, no + 0x20, 0, 0, 0, 0, 0); }
++static void finish(uint64_t *regs, uint64_t no, int ok, uint32_t status) {   // status +0x60: 0 ok, 2 failed, 7 failed (the game retries once)
++    s32(no + 0x60, ok ? 0 : status);
++    regs[0] = g8(M(ok ? G_OK_BYTE : G_FAIL_BYTE));
++}
++
++// ---- strings: the game's UTF-16 buffers (their string objects own them; only the contents are written)
++static void put16(uint64_t buf, uint32_t cap, const char *s) {
++    if (!buf || !cap) return;
++    uint32_t n = 0;
++    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p && n + 1 < cap;) {
++        uint32_t c = *p++;
++        int more = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
++        if (more) { c &= 0x3F >> more; while (more-- && (*p & 0xC0) == 0x80) c = c << 6 | (*p++ & 0x3F); }
++        s16(buf + 2 * n++, c > 0xFFFF ? '?' : (uint16_t)c);
++    }
++    s16(buf + 2 * n, 0);
++}
++static void get16(uint64_t buf, char *out, size_t cap) {   // ASCII only (codes and ids)
++    size_t n = 0;
++    for (uint32_t i = 0; buf && n + 1 < cap; i++) {
++        uint16_t c = *(volatile uint16_t *)(uintptr_t)(buf + 2 * i);
++        if (!c) break;
++        out[n++] = c < 0x80 ? (char)c : '?';
++    }
++    out[n] = 0;
++}
++
++// ---- course codes <-> data ids (the public SMM2 course id scheme: base 30 digits, a check value, the id XORed with a constant)
++static const char CODE_DIGITS[] = "0123456789BCDFGHJKLMNPQRSTVWXY";
++#define CODE_XOR 0x1680E07Cull
++static void code_of(uint32_t id, char out[12]) {
++    uint64_t x = id ^ CODE_XOR, chk = ((uint64_t)id + 64 * 64 - 31) % 64;
++    uint64_t v = 8ull << 40 | chk << 34 | (x & 0xFFFFF) << 14 | 1ull << 12 | x >> 20;
++    char d[9];
++    for (int i = 0; i < 9; i++) d[i] = CODE_DIGITS[v % 30], v /= 30;
++    snprintf(out, 12, "%.3s-%.3s-%.3s", d, d + 3, d + 6);
++}
++static int id_of(const char *code, uint32_t *id) {
++    char d[9]; int n = 0;
++    for (const char *p = code; p && *p; p++) {
++        if (*p == '-' || *p == ' ') continue;
++        if (n == 9) return 0;
++        d[n++] = (char)toupper((unsigned char)*p);
++    }
++    if (n != 9) return 0;
++    uint64_t v = 0;
++    for (int i = 8; i >= 0; i--) {
++        const char *k = strchr(CODE_DIGITS, d[i]);
++        if (!k || !*k) return 0;
++        v = v * 30 + (uint64_t)(k - CODE_DIGITS);
++    }
++    if ((v >> 12 & 1) != 1 || (v >> 40 & 0xF) != 8) return 0;
++    uint64_t data = ((v & 0xFFF) << 20 | (v >> 14 & 0xFFFFF)) ^ CODE_XOR;
++    if ((v >> 34 & 0x3F) != (data + 64 * 64 - 31) % 64) return 0;
++    *id = (uint32_t)data;
++    return 1;
++}
++
++// ---- JSON (the server's answers)
++typedef struct J { char t; double num; char *str; int n, cap; char **keys; struct J **v; } J;   // t: o a s n b z (null)
++static void jfree(J *j) {
++    if (!j) return;
++    for (int i = 0; i < j->n; i++) { jfree(j->v[i]); if (j->keys) free(j->keys[i]); }
++    free(j->v); free(j->keys); free(j->str); free(j);
++}
++typedef struct { const char *p, *e; int depth; } JP;
++static void jws(JP *s) { while (s->p < s->e && (*s->p == ' ' || *s->p == '\t' || *s->p == '\n' || *s->p == '\r')) s->p++; }
++static char *jstring(JP *s) {   // at the opening quote
++    size_t cap = 32, n = 0; char *o = malloc(cap);
++    s->p++;
++    while (s->p < s->e && *s->p != '"') {
++        if (n + 8 > cap) o = realloc(o, cap *= 2);
++        char c = *s->p++;
++        if (c != '\\') { o[n++] = c; continue; }
++        if (s->p >= s->e) break;
++        c = *s->p++;
++        if (c == 'u' && s->e - s->p >= 4) {
++            unsigned u = 0;
++            for (int i = 0; i < 4; i++) { char h = s->p[i]; u = u << 4 | (unsigned)(h <= '9' ? h - '0' : (h | 32) - 'a' + 10); }
++            s->p += 4;
++            if (u >= 0xD800 && u < 0xDC00 && s->e - s->p >= 6 && s->p[0] == '\\' && s->p[1] == 'u') {   // surrogate pair
++                unsigned l = 0;
++                for (int i = 2; i < 6; i++) { char h = s->p[i]; l = l << 4 | (unsigned)(h <= '9' ? h - '0' : (h | 32) - 'a' + 10); }
++                if (l >= 0xDC00 && l < 0xE000) { u = 0x10000 + ((u - 0xD800) << 10) + (l - 0xDC00); s->p += 6; }
++            }
++            if (u < 0x80) o[n++] = (char)u;
++            else if (u < 0x800) o[n++] = (char)(0xC0 | u >> 6), o[n++] = (char)(0x80 | (u & 0x3F));
++            else if (u < 0x10000) o[n++] = (char)(0xE0 | u >> 12), o[n++] = (char)(0x80 | (u >> 6 & 0x3F)), o[n++] = (char)(0x80 | (u & 0x3F));
++            else o[n++] = (char)(0xF0 | u >> 18), o[n++] = (char)(0x80 | (u >> 12 & 0x3F)), o[n++] = (char)(0x80 | (u >> 6 & 0x3F)), o[n++] = (char)(0x80 | (u & 0x3F));
++        } else o[n++] = c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c == 'b' ? '\b' : c == 'f' ? '\f' : c;
++    }
++    if (s->p < s->e) s->p++;
++    o[n] = 0;
++    return o;
++}
++static J *jvalue(JP *s);
++static void jadd(J *j, char *key, J *v) {
++    if (j->n == j->cap) { j->cap = j->cap ? 2 * j->cap : 8; j->v = realloc(j->v, sizeof *j->v * j->cap); if (j->t == 'o') j->keys = realloc(j->keys, sizeof *j->keys * j->cap); }
++    if (j->t == 'o') j->keys[j->n] = key;
++    j->v[j->n++] = v;
++}
++static J *jvalue(JP *s) {
++    jws(s);
++    if (s->p >= s->e || ++s->depth > 40) return NULL;
++    J *j = calloc(1, sizeof *j);
++    char c = *s->p;
++    if (c == '{' || c == '[') {
++        j->t = c == '{' ? 'o' : 'a'; s->p++;
++        for (;;) {
++            jws(s);
++            if (s->p < s->e && *s->p == (j->t == 'o' ? '}' : ']')) { s->p++; break; }
++            char *key = NULL;
++            if (j->t == 'o') {
++                if (s->p >= s->e || *s->p != '"') goto bad;
++                key = jstring(s); jws(s);
++                if (s->p >= s->e || *s->p != ':') { free(key); goto bad; }
++                s->p++;
++            }
++            J *v = jvalue(s);
++            if (!v) { free(key); goto bad; }
++            jadd(j, key, v);
++            jws(s);
++            if (s->p < s->e && *s->p == ',') s->p++;
++        }
++    } else if (c == '"') { j->t = 's'; j->str = jstring(s); }
++    else if (c == 't' || c == 'f') { j->t = 'b'; j->num = c == 't'; s->p += c == 't' ? 4 : 5; }
++    else if (c == 'n') { j->t = 'z'; s->p += 4; }
++    else { char *end; j->t = 'n'; j->num = strtod(s->p, &end); if (end == s->p) goto bad; s->p = end; }
++    s->depth--;
++    return j;
++bad:
++    jfree(j);
++    return NULL;
++}
++static J *jparse(const char *t, size_t n) { JP s = {t, t + n, 0}; return t ? jvalue(&s) : NULL; }
++static J *jget(J *j, const char *k) { if (j && j->t == 'o') for (int i = 0; i < j->n; i++) if (!strcmp(j->keys[i], k)) return j->v[i]; return NULL; }
++static J *jat(J *j, int i) { return j && j->t == 'a' && i >= 0 && i < j->n ? j->v[i] : NULL; }
++static int jlen(J *j) { return j && j->t == 'a' ? j->n : 0; }
++static double jnum(J *j, double d) { return j && (j->t == 'n' || j->t == 'b') ? j->num : d; }
++static const char *jstr(J *j, const char *d) { return j && j->t == 's' ? j->str : d; }
++
++// ---- the course server: in the app (mmk_embed_start, started at the first network check) or DM_SMM2_SERVER
++static pthread_mutex_t g_srv_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t g_srv_cv = PTHREAD_COND_INITIALIZER;
++static int g_srv_state;            // 0 starting, 1 up, -1 none
++static struct sockaddr_in g_srv_addr;
++static char g_token[192], g_nick[48] = "Player";
++
++static void srv_set(int state) { pthread_mutex_lock(&g_srv_lock); g_srv_state = state; pthread_cond_broadcast(&g_srv_cv); pthread_mutex_unlock(&g_srv_lock); }
++static void *srv_start(void *arg) {
++    (void)arg;
++    const char *ext = getenv("DM_SMM2_SERVER");
++    memset(&g_srv_addr, 0, sizeof g_srv_addr);
++    g_srv_addr.sin_family = AF_INET;
++    if (ext && *ext) {
++        char host[64]; snprintf(host, sizeof host, "%s", ext);
++        char *colon = strrchr(host, ':');
++        int port = colon ? atoi(colon + 1) : 8640;
++        if (colon) *colon = 0;
++        if (inet_pton(AF_INET, host, &g_srv_addr.sin_addr) != 1) { LOG("[RED] smm2 online: DM_SMM2_SERVER %s is not <IPv4>:<port>", ext); srv_set(-1); return NULL; }
++        g_srv_addr.sin_port = htons((uint16_t)port);
++        snprintf(g_token, sizeof g_token, "%s", getenv("DM_SMM2_TOKEN") ? getenv("DM_SMM2_TOKEN") : "");
++        LOG("smm2 online: course server %s", ext);
++        srv_set(1);
++        return NULL;
++    }
++#if DM_SMM2_EMBED
++    char dir[1024];
++    snprintf(dir, sizeof dir, "%s/Documents/smm2-courses", getenv("HOME") ? getenv("HOME") : ".");
++    mkdir(dir, 0755);
++    // The course key table is found in the game's own data with the first download (the server scans main's .rodata for it, never stores it)
++    uint16_t port = mmk_embed_start(dir, "tgrcode", g_main + g_ro_off, (size_t)(g_data_off - g_ro_off), g_nick, g_token, sizeof g_token);
++    if (!port) { LOG("[RED] smm2 online: the course server in the app did not start"); srv_set(-1); return NULL; }
++    inet_pton(AF_INET, "127.0.0.1", &g_srv_addr.sin_addr);
++    g_srv_addr.sin_port = htons(port);
++    LOG("smm2 online: course server in the app at 127.0.0.1:%u (TGRCode's courses, data in %s)", port, dir);
++    srv_set(1);
++#else
++    LOG("[RED] smm2 online: this build has no course server (nxkit's mac_build.sh did not build it) and DM_SMM2_SERVER is not set: Course World stays empty");
++    srv_set(-1);
++#endif
++    return NULL;
++}
++static int srv_ready(int wait_ms) {
++    struct timespec until; clock_gettime(CLOCK_REALTIME, &until);
++    until.tv_sec += wait_ms / 1000; until.tv_nsec += (long)(wait_ms % 1000) * 1000000; if (until.tv_nsec >= 1000000000) until.tv_sec++, until.tv_nsec -= 1000000000;
++    pthread_mutex_lock(&g_srv_lock);
++    while (!g_srv_state) if (pthread_cond_timedwait(&g_srv_cv, &g_srv_lock, &until)) break;
++    int s = g_srv_state;
++    pthread_mutex_unlock(&g_srv_lock);
++    return s == 1;
++}
++
++// One HTTP/1.0 request (no chunked answers, the connection closes at the end) on the loopback socket. Returns the status (0: none came)
++typedef struct { int status; char *body; size_t len; } Resp;
++static int http(const char *method, const char *path, const char *body, int timeout_ms, Resp *r) {
++    memset(r, 0, sizeof *r);
++    if (!srv_ready(timeout_ms)) return 0;
++    int fd = socket(AF_INET, SOCK_STREAM, 0);
++    if (fd < 0) return 0;
++    int one = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
++    struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
++    if (connect(fd, (struct sockaddr *)&g_srv_addr, sizeof g_srv_addr)) { LOG("smm2 online: %s %s: no connection (errno %d)", method, path, errno); close(fd); return 0; }
++    size_t blen = body ? strlen(body) : 0;
++    char head[1024];
++    int hn = snprintf(head, sizeof head, "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nUser-Agent: nxkit-smm2\r\n%s%s%s", method, path,
++                      *g_token ? "Authorization: Bearer " : "", g_token, *g_token ? "\r\n" : "");
++    if (body) hn += snprintf(head + hn, sizeof head - (size_t)hn, "Content-Type: application/json\r\nContent-Length: %zu\r\n\r\n", blen);
++    else hn += snprintf(head + hn, sizeof head - (size_t)hn, "\r\n");
++    if (hn <= 0 || (size_t)hn >= sizeof head) { close(fd); return 0; }
++    if (send(fd, head, (size_t)hn, 0) != hn || (blen && send(fd, body, blen, 0) != (ssize_t)blen)) { close(fd); return 0; }
++    size_t cap = 1 << 16, n = 0; char *buf = malloc(cap);
++    for (;;) {
++        if (cap - n < 1 << 14) buf = realloc(buf, cap *= 2);
++        ssize_t k = recv(fd, buf + n, cap - n - 1, 0);
++        if (k <= 0) break;
++        n += (size_t)k;
++    }
++    close(fd);
++    buf[n] = 0;
++    char *sep = strstr(buf, "\r\n\r\n");
++    if (strncmp(buf, "HTTP/", 5) || !sep) { free(buf); LOG("smm2 online: %s %s: no answer", method, path); return 0; }
++    r->status = atoi(strchr(buf, ' ') ? strchr(buf, ' ') + 1 : "0");
++    r->len = n - (size_t)(sep + 4 - buf);
++    r->body = malloc(r->len + 1);
++    memcpy(r->body, sep + 4, r->len); r->body[r->len] = 0;
++    free(buf);
++    SLOG("%s %s: %d, %zu bytes", method, path, r->status, r->len);
++    return r->status;
++}
++static J *srv_json(const char *method, const char *path, const char *body, int timeout_ms, int *status) {
++    Resp r;
++    int st = http(method, path, body, timeout_ms, &r);
++    if (status) *status = st;
++    J *j = st >= 200 && st < 300 ? jparse(r.body, r.len) : NULL;
++    if (st && (st < 200 || st >= 300) && st != 404) LOG("smm2 online: %s %s: HTTP %d %.160s", method, path, st, r.body ? r.body : "");
++    free(r.body);
++    return j;
++}
++
++// ---- makers: player ids for the makers of the courses served (the game compares ids for "my course"), back to their maker IDs and names
++#define NMAKERS 512
++static struct { uint64_t pid; char id[16], name[48]; } g_makers[NMAKERS];
++static int g_nmakers;
++static pthread_mutex_t g_mk_lock = PTHREAD_MUTEX_INITIALIZER;
++static char g_own_id[16];   // the player's maker ID on the course server (GET /api/me)
++
++static uint64_t maker_pid(const char *id, const char *name) {
++    if (!id) id = "";
++    if (*g_own_id && !strcmp(id, g_own_id)) return OWN_PID;
++    uint64_t h = 1469598103934665603ull;
++    for (const char *p = *id ? id : name ? name : ""; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
++    uint64_t pid = 0x5000000000000000ull | (h & 0xffffffffffffull) | 1;
++    pthread_mutex_lock(&g_mk_lock);
++    int i = 0;
++    while (i < g_nmakers && g_makers[i].pid != pid) i++;
++    if (i == g_nmakers) { i = g_nmakers < NMAKERS ? g_nmakers++ : (int)(pid % NMAKERS); g_makers[i].pid = pid; g_makers[i].name[0] = 0; }
++    snprintf(g_makers[i].id, sizeof g_makers[i].id, "%s", id);
++    if (name && *name) snprintf(g_makers[i].name, sizeof g_makers[i].name, "%s", name);
++    pthread_mutex_unlock(&g_mk_lock);
++    return pid;
++}
++static void maker_of(uint64_t pid, char id[16], char name[48]) {
++    id[0] = 0; snprintf(name, 48, "Maker");
++    if (pid == OWN_PID) { snprintf(id, 16, "%s", g_own_id); snprintf(name, 48, "%s", g_nick); return; }
++    pthread_mutex_lock(&g_mk_lock);
++    for (int i = 0; i < g_nmakers; i++)
++        if (g_makers[i].pid == pid) { snprintf(id, 16, "%s", g_makers[i].id); if (g_makers[i].name[0]) snprintf(name, 48, "%s", g_makers[i].name); break; }
++    pthread_mutex_unlock(&g_mk_lock);
++}
++static void own_maker_id(void) {   // once, from the server's local account
++    if (*g_own_id) return;
++    J *me = srv_json("GET", "/api/me", NULL, 8000, NULL);
++    snprintf(g_own_id, sizeof g_own_id, "%s", jstr(jget(me, "maker_id"), ""));
++    jfree(me);
++}
++
++// ---- a default Mii (nn::mii::CharInfo, 0x58 bytes): the player's Maker avatar and the makers' records. Course World asks for a new avatar
++// (the console's Mii editor) without a valid one. The face values are the console's first default Mii's (Ryujinx's DefaultMii table)
++static void default_mii(uint64_t out, const char *nick) {
++    static const uint8_t face[0x32] = {0, 0, 0, 64, 64, 0, 0, 0, 0, 0, 0, 33, 1, 0, 2, 8, 4, 3, 4, 2, 12, 6, 1, 4, 3, 6, 2, 10, 1, 4, 9,
++                                        23, 19, 4, 3, 13, 8, 0, 0, 4, 10, 0, 8, 4, 10, 0, 4, 2, 20, 0};
++    static const uint8_t create_id[16] = {'n', 'x', 'k', 'i', 't', 'M', 'i', 'i', 0x80, 1, 2, 3, 4, 5, 6, 7};   // (byte 8: the valid bits 10xxxxxx)
++    uint8_t *o = (uint8_t *)(uintptr_t)out;
++    memset(o, 0, 0x58);
++    memcpy(o, create_id, 16);
++    put16(out + 16, 11, nick && *nick ? nick : "Player");   // nickname: UTF-16, 10 characters
++    memcpy(o + 0x26, face, sizeof face);
++}
++
++// ---- course records (0x548 bytes in the course ring at NetObj +0x30780: entries, +8 capacity, +0xc head, +0x10 count)
++#define RING_COURSES 0x30780
++#define COURSE_ENTRY 0x548
++#define RING_USERS 0x68
++#define USER_ENTRY 0x1f0
++static const char *const STYLES[5] = {"M1", "M3", "MW", "WU", "3W"};
++static int style_of(const char *s) { for (int i = 0; i < 5; i++) if (s && !strcmp(s, STYLES[i])) return i; return 0; }
++static uint32_t band_of(J *m) { uint32_t v = (uint32_t)jnum(jget(m, "difficulty"), 50); return v < 35 ? 0 : v < 75 ? 1 : v < 96 ? 2 : 3; }
++
++static void fill_course(uint64_t e, J *m, uint32_t id) {
++    char code[12], bare[10];
++    code_of(id, code);
++    snprintf(bare, sizeof bare, "%.3s%.3s%.3s", code, code + 4, code + 8);   // (the game shows it with dashes)
++    s64(e + 0x000, id);
++    put16(g64(e + 0x010), g32(e + 0x018), bare);
++    s64(e + 0x030, maker_pid(jstr(jget(m, "maker_id"), ""), jstr(jget(m, "maker"), "")));
++    put16(g64(e + 0x040), g32(e + 0x048), jstr(jget(m, "name"), ""));
++    put16(g64(e + 0x098), g32(e + 0x0a0), jstr(jget(m, "description"), ""));
++    s8(e + 0x170, (uint8_t)style_of(jstr(jget(m, "style"), "")));
++    s8(e + 0x171, (uint8_t)jnum(jget(m, "theme"), 0));
++    s64(e + 0x178, (uint64_t)jnum(jget(m, "uploaded"), 0));
++    s32(e + 0x180, band_of(m));
++    // the player's own standing: +0x184 play state (1 not played, 2 played, 3 cleared), +0x188 rating (1 not played, 2 played, 3 liked, 4 booed)
++    J *you = jget(m, "you");
++    int vote = (int)jnum(jget(you, "vote"), 0), cleared = jnum(jget(you, "cleared"), 0) != 0, played = cleared || jnum(jget(you, "played"), 0) != 0;
++    s32(e + 0x184, !you ? 0 : cleared ? 3 : played ? 2 : 1);
++    s32(e + 0x188, !you ? 0 : vote > 0 ? 3 : vote < 0 ? 4 : played ? 2 : 1);
++    s32(e + 0x18c, 0); s8(e + 0x190, 0); s8(e + 0x191, 0);
++    for (uint64_t o = 0x194; o <= 0x1a4; o += 4) s32(e + o, 0);   // no clear condition
++    uint32_t stats[10] = {(uint32_t)jnum(jget(m, "plays"), 0), (uint32_t)jnum(jget(m, "attempts"), 0), 0, (uint32_t)jnum(jget(m, "clears"), 0), 0, 0, 0,
++                          (uint32_t)jnum(jget(m, "likes"), 0), 0, 0};   // plays, attempts, ?, clears, ..., likes
++    for (int i = 0; i < 10; i++) s32(e + 0x1a8 + 4 * i, stats[i]);
++    const char *fc = jstr(jget(m, "first_clear"), ""), *wr = jstr(jget(m, "record_holder"), "");
++    s64(e + 0x1d0, *fc ? maker_pid(fc, NULL) : 0); s64(e + 0x1d8, *wr ? maker_pid(wr, NULL) : 0);
++    s32(e + 0x1e0, (uint32_t)jnum(jget(m, "record_ms"), 0)); s32(e + 0x1e4, 0);
++    s32(e + 0x1e8, (uint32_t)jnum(jget(m, "comments"), 0));
++    s64(e + 0x1f0, id);
++    if (g64(e + 0x200)) s8(g64(e + 0x200), 0);
++    s8(e + 0x310, 0); s32(e + 0x314, 0);
++    if (g64(e + 0x320)) s8(g64(e + 0x320), 0);
++    s64(e + 0x398, id);
++    if (g64(e + 0x3a8)) s8(g64(e + 0x3a8), 0);
++    s8(e + 0x4b8, 0); s32(e + 0x4bc, 0);
++    if (g64(e + 0x4c8)) s8(g64(e + 0x4c8), 0);
++    s8(e + 0x540, 1);   // valid
++}
++
++// The courses of a server answer ({"courses": [...]}) into the course ring; band < 4 keeps one difficulty. Returns how many
++static uint32_t courses_into_ring(uint64_t no, J *list, uint32_t band, const char *only_holder, const char *only_first) {
++    uint64_t ring = no + RING_COURSES, entries = g64(ring);
++    uint32_t cap = g32(ring + 8), count = 0;
++    s64(ring + 0xc, 0);   // head and count
++    for (int i = 0; i < jlen(list) && count < cap && entries; i++) {
++        J *m = jat(list, i);
++        uint32_t id;
++        if (!id_of(jstr(jget(m, "code"), ""), &id)) continue;
++        if (band < 4 && band_of(m) != band) continue;
++        if (only_holder && strcmp(jstr(jget(m, "record_holder"), ""), only_holder)) continue;
++        if (only_first && strcmp(jstr(jget(m, "first_clear"), ""), only_first)) continue;
++        fill_course(entries + (uint64_t)COURSE_ENTRY * count++, m, id);
++    }
++    s32(ring + 0x10, count);
++    return count;
++}
++
++// ---- user records (0x1f0 bytes in the user ring at NetObj +0x68)
++static void user_reset(uint64_t e) {
++    if (g64(e + 0x08)) s16(g64(e + 0x08), 0);
++    if (g64(e + 0x30)) s16(g64(e + 0x30), 0);
++    s64(e + 0x58, 0);
++    if (g64(e + 0x68)) s8(g64(e + 0x68), 0);
++    s16(e + 0x80, 0xff);
++    for (uint64_t o = 0x88; o < 0x168; o += 8) s64(e + o, 0);
++    s8(e + 0x168, 0);
++    for (int i = 0; i < 29; i++) s8(e + 0x169 + i, i % 3 == 0);
++    for (uint64_t o = 0x188; o < 0x1a8; o += 8) s64(e + o, 0);
++    if (g64(e + 0x1b0)) s8(g64(e + 0x1b0), 0);
++    s32(e + 0x1e8, 0);
++    s8(e + 0x1ec, 0);
++}
++static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char *name, J *prof) {
++    uint32_t likes = 0, points = 0;
++    J *cs = jget(prof, "courses");
++    for (int i = 0; i < jlen(cs); i++) {
++        int32_t l = (int32_t)jnum(jget(jat(cs, i), "likes"), 0), b = (int32_t)jnum(jget(jat(cs, i), "boos"), 0);
++        likes += (uint32_t)l; points += l > b ? (uint32_t)(l - b) : 0;
++    }
++    const char *nm = jstr(jget(jget(prof, "maker"), "name"), name && *name ? name : "Maker");
++    char code[12] = "";
++    if (maker_id && strlen(maker_id) == 11) snprintf(code, sizeof code, "%.3s%.3s%.3s", maker_id, maker_id + 4, maker_id + 8);
++    user_reset(e);
++    put16(g64(e + 0x08), g32(e + 0x10), code);   // maker code (no dashes)
++    put16(g64(e + 0x30), g32(e + 0x38), nm);
++    s64(e + 0x58, pid);
++    s8(e + 0x98, 1);   // comments on
++    default_mii(e + 0x9c, nm);
++    s32(e + 0x124, likes); s32(e + 0x128, points);
++    s32(e + 0x190, (uint32_t)jlen(cs)); s32(e + 0x194, 100);   // courses uploaded, the most allowed
++    s8(e + 0x1ec, 1);   // a registered Course World user
++}
++
++// ---- thumbnails (0x1c000-byte blocks): JPEG at +0, its size at +0x1bf9c, HMAC-SHA256 at +0x1bfa0 under a key from the seed words at +0x1bfc0,
++// signed with the game's own functions as its blank thumbnail is; the game checks it (and deletes a downloaded course with a failing one)
++#define THUMB_BLOCK 0x1c000
++static int sign_jpeg(uint64_t dst, uint32_t size, const uint8_t *jpeg, size_t len) {
++    if (!len || len > size - 0x64) return 0;
++    uint64_t tail = dst + size - 0x64;
++    memset((void *)(uintptr_t)dst, 0, size);
++    memcpy((void *)(uintptr_t)dst, jpeg, len);
++    s32(tail, (uint32_t)len);
++    uint8_t *w = calloc(1, 0x100);   // RNG state +0, key +0x80, key table holder +0xc0
++    uint64_t st = (uint64_t)(uintptr_t)w, key = st + 0x80, table = st + 0xc0;
++    game_call(F_RNG_INIT, st, 0, 0, 0, 0, 0);
++    game_call(F_RNG_SEEDS, st, tail + 0x24, tail + 0x28, tail + 0x2c, tail + 0x30, 0);
++    s64(table, M(K_THUMB_KEYS));
++    game_call(F_THUMB_KEY, table, key, st, 0, 0, 0);
++    game_call(F_HMAC, tail + 4, 0x20, dst, len, key, 0x10);
++    free(w);
++    return 1;
++}
++// A 640 x 360 picture of one colour (baseline JPEG, one 8x8 block per component and MCU, DC only) for a course without a picture
++typedef struct { uint8_t *p; size_t n, cap; uint32_t acc; int bits; } Bits;
++static void b8(Bits *b, uint8_t v) { if (b->n < b->cap) b->p[b->n++] = v; }
++static void b16(Bits *b, unsigned v) { b8(b, (uint8_t)(v >> 8)); b8(b, (uint8_t)v); }
++static void bits(Bits *b, uint32_t code, int len) {
++    while (len--) {
++        b->acc = b->acc << 1 | (code >> len & 1);
++        if (++b->bits == 8) { b8(b, (uint8_t)b->acc); if ((b->acc & 0xff) == 0xff) b8(b, 0); b->acc = 0; b->bits = 0; }
++    }
++}
++static size_t plain_jpeg(uint8_t *out, size_t cap, int w, int h, int r, int g, int bl) {
++    Bits b = {out, 0, cap, 0, 0};
++    int dc[3] = {(int)(0.299 * r + 0.587 * g + 0.114 * bl + 0.5) - 128, (int)(128 - 0.168736 * r - 0.331264 * g + 0.5 * bl + 0.5) - 128,
++                 (int)(128 + 0.5 * r - 0.418688 * g - 0.081312 * bl + 0.5) - 128};   // with every quantizer 8 the DC coefficient is the level-shifted value
++    b16(&b, 0xFFD8);
++    b16(&b, 0xFFE0); b16(&b, 16); { const char *j = "JFIF"; for (int i = 0; i < 5; i++) b8(&b, (uint8_t)j[i]); } b16(&b, 0x0101); b8(&b, 0); b16(&b, 1); b16(&b, 1); b8(&b, 0); b8(&b, 0);
++    b16(&b, 0xFFDB); b16(&b, 67); b8(&b, 0); for (int i = 0; i < 64; i++) b8(&b, 8);
++    b16(&b, 0xFFC0); b16(&b, 17); b8(&b, 8); b16(&b, (unsigned)h); b16(&b, (unsigned)w); b8(&b, 3);
++    for (int c = 1; c <= 3; c++) { b8(&b, (uint8_t)c); b8(&b, 0x11); b8(&b, 0); }
++    static const uint8_t dc_counts[16] = {0, 1, 5, 1, 1, 1, 1, 1, 1};   // the standard luminance DC table (categories 0..11)
++    b16(&b, 0xFFC4); b16(&b, 2 + 17 + 12 + 17 + 1);
++    b8(&b, 0x00); for (int i = 0; i < 16; i++) b8(&b, dc_counts[i]); for (int i = 0; i < 12; i++) b8(&b, (uint8_t)i);
++    b8(&b, 0x10); b8(&b, 1); for (int i = 1; i < 16; i++) b8(&b, 0); b8(&b, 0x00);   // AC table: one code, end of block ("0")
++    b16(&b, 0xFFDA); b16(&b, 12); b8(&b, 3); for (int c = 1; c <= 3; c++) { b8(&b, (uint8_t)c); b8(&b, 0); } b8(&b, 0); b8(&b, 63); b8(&b, 0);
++    static const uint16_t code[12] = {0x0, 0x2, 0x3, 0x4, 0x5, 0x6, 0xe, 0x1e, 0x3e, 0x7e, 0xfe, 0x1fe};
++    static const uint8_t clen[12] = {2, 3, 3, 3, 3, 3, 4, 5, 6, 7, 8, 9};
++    for (int mcu = 0, n = ((w + 7) / 8) * ((h + 7) / 8); mcu < n; mcu++)
++        for (int c = 0; c < 3; c++) {
++            int d = mcu ? 0 : dc[c], a = d < 0 ? -d : d, cat = 0;
++            while (a >> cat) cat++;
++            bits(&b, code[cat], clen[cat]);
++            if (cat) bits(&b, (uint32_t)(d < 0 ? d - 1 : d) & ((1u << cat) - 1), cat);
++            bits(&b, 0, 1);   // end of block
++        }
++    if (b.bits) bits(&b, 0xff, 8 - b.bits);
++    b16(&b, 0xFFD9);
++    return b.n < cap ? b.n : 0;
++}
++static int stand_in_thumbnail(uint64_t dst) {
++    static uint8_t jpeg[0x4000]; static size_t len;
++    if (!len) len = plain_jpeg(jpeg, sizeof jpeg, 640, 360, 0xb4, 0xc8, 0xdc);
++    return sign_jpeg(dst, THUMB_BLOCK, jpeg, len);
++}
++static int server_thumbnail(uint64_t id, uint64_t dst, int wait_ms) {   // 1: the server's picture is in dst; 0: none (yet)
++    char code[12], path[128];
++    code_of((uint32_t)id, code);
++    snprintf(path, sizeof path, "/api/courses/%s/thumbnail?wait_ms=%d&soon_ms=1500", code, wait_ms);
++    Resp r;
++    int st = http("GET", path, NULL, wait_ms + 6000, &r);
++    int ok = st == 200 && sign_jpeg(dst, THUMB_BLOCK, (const uint8_t *)r.body, r.len);
++    free(r.body);
++    return ok;
++}
++
++// ---- the wrappers
++#define USE(x) (void)(x)
++static void w_login_ready(uint64_t *regs) {   // enl session cLogInReady: logged in at once, no NEX login
++    uint64_t self = regs[0];
++    s8(self + 0x19, 1); s8(self + 0x1a, 0);
++    regs[0] = game_call(F_STATE_CHANGE, self + 0x30, 4, 0, 0, 0, 0);   // -> cLogIn
++    LOG("smm2 online: Course World session logged in (course server, no Nintendo network)");
++}
++static void w_login(uint64_t *regs) {   // cLogIn, the logged-in resting state: +0xe4 the command posted
++    uint64_t self = regs[0];
++    int32_t cmd = (int32_t)g32(self + 0xe4);
++    s8(self + 0x19, 1); s8(self + 0x1a, 0);
++    if (cmd == 0) regs[0] = game_call(F_STATE_CHANGE, self + 0x30, 0x1b, 0, 0, 0, 0);        // log out
++    else if (cmd == 0xf) regs[0] = game_call(F_STATE_CHANGE, self + 0x30, 0x1c, 0, 0, 0, 0); // log out and stop
++    else if (cmd != -1) { SLOG("session command %d done", cmd); s32(self + 0xe4, 0xffffffffu); }   // (matchmaking commands are dropped)
++}
++
++static void w_own_user(uint64_t *regs) {   // GetUsers for the player: their record, a registered user with a Mii
++    uint64_t no = regs[0];
++    own_maker_id();
++    lock(no);
++    s64(no + RING_USERS + 0xc, 0);
++    if (g32(no + RING_USERS + 8) > 0 && g64(no + RING_USERS)) {
++        uint64_t e = g64(no + RING_USERS);
++        user_reset(e);
++        char code[12] = "";
++        if (strlen(g_own_id) == 11) snprintf(code, sizeof code, "%.3s%.3s%.3s", g_own_id, g_own_id + 4, g_own_id + 8);
++        put16(g64(e + 0x08), g32(e + 0x10), code);
++        put16(g64(e + 0x30), g32(e + 0x38), g_nick);
++        s64(e + 0x58, OWN_PID);
++        default_mii(e + 0x9c, g_nick);
++        s32(e + 0x190, 0); s32(e + 0x194, 100);
++        s8(e + 0x1ec, 1);
++        s32(no + RING_USERS + 0x10, 1);
++    }
++    unlock(no);
++    // The Maker avatar: a name and a Mii in the save when it has none (else Course World sends the player to the console's Mii editor)
++    uint64_t set = g64(M(G_SETTINGS));
++    if (set && g64(set + 0x2b0) && *(volatile uint16_t *)(uintptr_t)g64(set + 0x2b0) == 0) { put16(g64(set + 0x2b0), 11, g_nick); LOG("smm2 online: Maker avatar named %s", g_nick); }
++    uint64_t us = g64(M(G_USER_SETTINGS)) ? g64(g64(M(G_USER_SETTINGS)) + 0x20) : 0;
++    if (us && !g64(us + 0x60) && !g64(us + 0x68)) { default_mii(us + 0x60, g_nick); LOG("smm2 online: Maker avatar Mii set to the default Mii"); }
++    finish(regs, no, 1, 0);
++}
++
++static J *maker_get(const char *id) {   // GET /api/makers/<XXX-XXX-XXX>
++    if (!id || strlen(id) != 11 || id[3] != '-' || id[7] != '-') return NULL;
++    char path[64]; snprintf(path, sizeof path, "/api/makers/%s", id);
++    return srv_json("GET", path, NULL, 10000, NULL);
++}
++
++static void w_search(uint64_t *regs) {   // SearchCourses: Course World's lists (type at +0x746e8; 14 is the Endless Challenge, not served)
++    uint64_t no = regs[0];
++    uint32_t type = g32(no + 0x746e8), page = g32(no + 0x737a8), band = 4, style = 5;
++    const char *sort = "popular", *list_kind = NULL;
++    int by_maker = 0, none = 0;
++    char id[16] = "", name[48], path[256];
++    switch (type) {
++    case 0: sort = "hot"; break;
++    case 1: band = g32(no + 0x746ec); break;   // Popular, by difficulty
++    case 2: sort = "new"; break;
++    case 4: band = g32(no + 0x746fc); style = g8(no + 0x74704); if (g32(no + 0x7470c) == 1) sort = "new"; break;   // Detailed Search
++    case 5: break;
++    case 6: case 8: case 9: by_maker = 1; break;   // a maker's courses, world records, first clears
++    case 7: list_kind = "liked"; break;
++    case 10: list_kind = "played"; break;
++    default: none = 1; break;   // followed makers, versus, the Endless Challenge
++    }
++    if (by_maker || list_kind) maker_of(g64(no + 0x746f0), id, name);
++    J *j = NULL;
++    if (by_maker) j = maker_get(id);
++    else if (list_kind && *id && page == 0) { snprintf(path, sizeof path, "/api/makers/%s/%s", id, list_kind); j = srv_json("GET", path, NULL, 10000, NULL); }
++    else if (!none && !list_kind) {
++        snprintf(path, sizeof path, "/api/courses?sort=%s&offset=%u&limit=100%s%s", sort, page * 100, style < 5 ? "&style=" : "", style < 5 ? STYLES[style] : "");
++        j = srv_json("GET", path, NULL, 15000, NULL);
++    }
++    J *list = jget(j, "courses");
++    lock(no);
++    uint32_t n = courses_into_ring(no, list, band, type == 8 ? id : NULL, type == 9 ? id : NULL);
++    s8(no + 0x737ac, !none && !by_maker && !list_kind && jlen(list) >= 100);   // a next page follows
++    unlock(no);
++    LOG("smm2 online: course list (type %u, page %u%s%s): %u courses", type, page, *id ? ", maker " : "", id, n);
++    int ok = none || by_maker || list_kind || j;
++    jfree(j);
++    finish(regs, no, ok, 2);
++}
++
++static void w_by_code(uint64_t *regs) {   // GetUserOrCourse: a course (or a maker) by its ID, typed in at +0x74728
++    uint64_t no = regs[0];
++    char raw[40], bare[16], dashed[16], path[64];
++    get16(g64(no + 0x74728), raw, sizeof raw);
++    size_t k = 0;
++    for (const char *p = raw; *p && k < 9; p++) if (*p != '-' && *p != ' ') bare[k++] = (char)toupper((unsigned char)*p);
++    bare[k] = 0;
++    snprintf(dashed, sizeof dashed, "%.3s-%.3s-%.3s", bare, bare + 3, bare + 6);
++    snprintf(path, sizeof path, "/api/courses/%s", dashed);
++    J *course = srv_json("GET", path, NULL, 15000, NULL);   // (the server looks it up at TGRCode, up to ~6 s)
++    J *maker = course ? NULL : maker_get(dashed);
++    uint32_t id;
++    lock(no);
++    s64(no + RING_COURSES + 0xc, 0); s64(no + RING_USERS + 0xc, 0);
++    if (course && id_of(dashed, &id) && g32(no + RING_COURSES + 8) && g64(no + RING_COURSES)) { fill_course(g64(no + RING_COURSES), course, id); s32(no + RING_COURSES + 0x10, 1); }
++    else if (maker && g32(no + RING_USERS + 8) && g64(no + RING_USERS)) {
++        const char *nm = jstr(jget(jget(maker, "maker"), "name"), "");
++        fill_user(g64(no + RING_USERS), maker_pid(dashed, nm), dashed, nm, maker); s32(no + RING_USERS + 0x10, 1);
++    }
++    unlock(no);
++    LOG("smm2 online: ID search %s: %s", dashed, course ? "a course" : maker ? "a maker" : "nothing");
++    jfree(course); jfree(maker);
++    finish(regs, no, 1, 0);
++}
++
++#define MAX_USERS 64
++static void users_answer(uint64_t *regs, uint64_t no, const uint64_t *pids, uint32_t n, int with_profiles) {
++    static __thread char ids[MAX_USERS][16], names[MAX_USERS][48];
++    J *prof[MAX_USERS] = {0};
++    if (n > MAX_USERS) n = MAX_USERS;
++    for (uint32_t i = 0; i < n; i++) {
++        maker_of(pids[i], ids[i], names[i]);
++        if (with_profiles && pids[i]) prof[i] = maker_get(ids[i]);   // (outside the lock: HTTP)
++    }
++    lock(no);
++    uint64_t ring = no + RING_USERS;
++    uint32_t cap = g32(ring + 8), m = 0;
++    s64(ring + 0xc, 0);
++    for (uint32_t i = 0; i < n && m < cap && g64(ring); i++)
++        if (pids[i]) fill_user(g64(ring) + (uint64_t)USER_ENTRY * m++, pids[i], ids[i], names[i], prof[i]);
++    s32(ring + 0x10, m);
++    unlock(no);
++    for (uint32_t i = 0; i < n; i++) jfree(prof[i]);
++    SLOG("users: %u", m);
++    finish(regs, no, 1, 0);
++}
++static void w_users_list(uint64_t *regs) {   // GetUsers for the players listed in the ring at +0x72b10 (u64 ids)
++    uint64_t no = regs[0], pids[MAX_USERS];
++    uint32_t n = 0;
++    lock(no);
++    uint64_t req = no + 0x72b10;
++    uint32_t cap = g32(req + 8), head = g32(req + 0xc), count = g32(req + 0x10);
++    for (uint32_t i = 0; i < count && cap && n < MAX_USERS && g64(req); i++) pids[n++] = g64(g64(req) + 8ull * ((head + i) % cap));
++    unlock(no);
++    users_answer(regs, no, pids, n, 0);
++}
++static void w_user_page(uint64_t *regs) { uint64_t no = regs[0], pid = g64(no + 0x73a30); users_answer(regs, no, &pid, 1, 1); }   // a maker's page
++static void w_user_counts(uint64_t *regs) { uint64_t no = regs[0]; lock(no); s64(no + 0x73a3c, 0); unlock(no); finish(regs, no, 1, 0); }
++
++static void w_courses_by_id(uint64_t *regs) {   // GetCourses: the records of the courses in the linked list at +0x74748 (after a play)
++    uint64_t no = regs[0], ids[64];
++    uint32_t n = 0;
++    lock(no);
++    uint64_t end = no + 0x74750, p = g64(no + 0x74758);
++    for (int guard = 0; p && p != end && guard < 256 && n < 64; guard++) { ids[n++] = g64(p - 8); p = g64(p + 8); }
++    unlock(no);
++    J *metas[64] = {0};
++    for (uint32_t i = 0; i < n; i++) {
++        char code[12], path[64];
++        code_of((uint32_t)ids[i], code);
++        snprintf(path, sizeof path, "/api/courses/%s", code);
++        metas[i] = srv_json("GET", path, NULL, 10000, NULL);
++    }
++    lock(no);
++    uint64_t ring = no + RING_COURSES;
++    uint32_t cap = g32(ring + 8), count = 0;
++    s64(ring + 0xc, 0);
++    for (uint32_t i = 0; i < n && count < cap && g64(ring); i++) if (metas[i]) fill_course(g64(ring) + (uint64_t)COURSE_ENTRY * count++, metas[i], (uint32_t)ids[i]);
++    s32(ring + 0x10, count);
++    unlock(no);
++    for (uint32_t i = 0; i < n; i++) jfree(metas[i]);
++    finish(regs, no, count > 0 || n == 0, 2);
++}
++
++// GetObject: a course's file (data id +0x8e5f0) into the buffer at +0x8e5e8: {u32 1, u16 0x10, u16 0, u32 CRC32 of the course, "SCDL"}, then the
++// course (0x5bfc0 bytes) encrypted with the game's own course encryption, then its 0x30-byte block (IV, seed, CMAC). The server gives it plain
++#define COURSE_SIZE 0x5bfc0
++static uint32_t crc32(const uint8_t *p, size_t n) {
++    uint32_t c = 0xFFFFFFFFu;
++    while (n--) { c ^= *p++; for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1; }
++    return ~c;
++}
++static void w_course_file(uint64_t *regs) {
++    uint64_t no = regs[0], id = g64(no + 0x8e5f0), dest = g64(no + 0x8e5e8);
++    char code[12], path[96];
++    code_of((uint32_t)id, code);
++    snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=20000", code);   // (a listed TGRCode course is fetched first: TGRCode allows about one request in 6 s)
++    Resp r;
++    int st = http("GET", path, NULL, 26000, &r);
++    if (st != 200 || r.len != COURSE_SIZE || !dest) {
++        LOG("smm2 online: course %s: %s (HTTP %d, %zu bytes)", code, st == 200 ? "not a course" : "download failed", st, r.len);
++        free(r.body);
++        finish(regs, no, 0, st == 200 ? 2 : 7);
++        return;
++    }
++    static uint8_t *plain; static uint64_t *keyholder;
++    if (!plain) { plain = malloc(COURSE_SIZE); keyholder = malloc(16); }
++    memcpy(plain, r.body, COURSE_SIZE);
++    free(r.body);
++    keyholder[0] = M(K_COURSE_KEYS);
++    uint32_t crc = crc32(plain, COURSE_SIZE);
++    game_call(F_ENCRYPT, (uint64_t)(uintptr_t)keyholder, dest + 0x10 + COURSE_SIZE, COURSE_SIZE, dest + 0x10, (uint64_t)(uintptr_t)plain, 0);
++    s32(dest, 1); s16(dest + 4, 0x10); s16(dest + 6, 0); s32(dest + 8, crc); memcpy((void *)(uintptr_t)(dest + 0xc), "SCDL", 4);
++    LOG("smm2 online: course %s downloaded", code);
++    finish(regs, no, 1, 0);
++}
++
++static void w_thumbnails(uint64_t *regs) {   // the pictures of the courses in the ring at +0x74bc8 (0x1a8-byte entries, data id at +0) into *(+0x8e608)[i]
++    uint64_t no = regs[0], ids[8], outs[8];
++    uint32_t n = 0;
++    lock(no);
++    uint64_t ring = no + 0x74bc8, entries = g64(ring), out = g64(no + 0x8e608), downloading = g64(no + 0x8e5f0);
++    uint32_t cap = g32(ring + 8), head = g32(ring + 0xc), count = g32(ring + 0x10), nout = g32(no + 0x8e600);
++    for (uint32_t i = 0; i < count && cap && entries && n < 8; i++) {
++        uint64_t o = i < nout && out ? g64(out + 8ull * i) : 0;
++        if (o) ids[n] = g64(entries + 0x1a8ull * ((head + i) % cap)), outs[n++] = o;
++    }
++    s32(no + 0x60, 0);
++    unlock(no);
++    uint32_t got = 0;
++    for (uint32_t i = 0; i < n; i++) {   // (what the server holds now; one being downloaded is waited for, or gets a stand-in, which the Coursebot needs)
++        int dl = ids[i] == downloading;
++        if (server_thumbnail(ids[i], outs[i], dl ? 7000 : 0)) { got++; continue; }
++        if (dl && stand_in_thumbnail(outs[i])) continue;
++        s32(outs[i] + 0x1bf9c, 0);   // none: the game's placeholder
++    }
++    SLOG("pictures: %u of %u", got, n);
++    regs[0] = g8(M(G_OK_BYTE));
++}
++
++// cDownload (main+0x17661f0, observation gate): a Download whose picture failed with the list (the server did not have it yet) waits in state 3
++// (+0x244) on the course's thumbnail cache slot (profile +0x132858, 0x1c1b8-byte slots: block, +0x1c000 data id, +0x1c1b2 failed, +0x1c1b4 valid),
++// whose failed mark the cache never clears: the mark goes and the slot gets the server's picture or the stand-in through the game's cache function
++static void obs_download(const uint64_t *regs) {
++    uint64_t self = regs[0], id;
++    if (!g_on || g32(self + 0x244) != 3 || !(id = g64(self + 600))) return;
++    uint64_t profile = g64(M(G_PROFILE)), slots = profile ? g64(profile + 0x132858) : 0;
++    uint32_t n = profile ? g32(profile + 0x132850) : 0;
++    for (uint32_t i = 0; i < n && i < 100 && slots; i++) {
++        uint64_t slot = slots + 0x1c1b8ull * i;
++        if (g64(slot + 0x1c000) != id) continue;
++        if (!g8(slot + 0x1c1b2)) return;
++        s8(slot + 0x1c1b2, 0);
++        if (g8(slot + 0x1c1b4)) return;
++        int real = server_thumbnail(id, slot, 0);
++        if (!real && !stand_in_thumbnail(slot)) return;
++        game_call(F_THUMB_CACHE_PUT, profile, slot, id, 0, 0, 0);
++        LOG("smm2 online: Download: the course's picture again (%s): %s", real ? "the server's" : "a stand-in", g8(slot + 0x1c1b4) ? "valid" : "rejected");
++        return;
++    }
++}
++
++static void w_play_result(uint64_t *regs) {   // PostPlayResult: a play (and a clear with its time) for the server's counts
++    uint64_t no = regs[0], id = g64(no + 0x8e618);
++    uint32_t cleared = g32(no + 0x8e620), ms = g32(no + 0x8e624);
++    char code[12], path[64], body[48];
++    code_of((uint32_t)id, code);
++    snprintf(path, sizeof path, "/api/courses/%s/play", code); jfree(srv_json("POST", path, "{}", 5000, NULL));
++    if (cleared == 1) { snprintf(path, sizeof path, "/api/courses/%s/clear", code); snprintf(body, sizeof body, "{\"time_ms\":%u}", ms); jfree(srv_json("POST", path, body, 5000, NULL)); }
++    LOG("smm2 online: played %s%s", code, cleared == 1 ? " (cleared)" : "");
++    finish(regs, no, 1, 0);
++}
++static void w_can_rate(uint64_t *regs) {   // CanPostRatingAndComment: rating open, two comment allowances
++    uint64_t no = regs[0], id = g64(no + 0xe8578);
++    lock(no);
++    for (int i = 0; i < 2; i++) { uint64_t r = no + (i ? 0xe8530 : 0xe8580); s64(r, id); s8(r + 8, 0); s32(r + 0xc, 0); s16(r + 0x10, i ? 0x0a0a : 0); s8(r + 0x12, 1); }
++    unlock(no);
++    finish(regs, no, 1, 0);
++}
++static void w_rate(uint64_t *regs) {   // PostRatingInfo: 1 like, 2 boo, 0 taken back
++    uint64_t no = regs[0], id = g64(no + 0xe8548);
++    uint32_t a = g32(no + 0xe8550);
++    char code[12], path[64];
++    code_of((uint32_t)id, code);
++    J *j = NULL;
++    if (a == 1 || a == 2) { snprintf(path, sizeof path, "/api/courses/%s/%s", code, a == 1 ? "like" : "boo"); j = srv_json("POST", path, "{}", 5000, NULL); }
++    else if (a == 0) { snprintf(path, sizeof path, "/api/courses/%s/vote", code); j = srv_json("DELETE", path, NULL, 5000, NULL); }
++    finish(regs, no, j != NULL || a > 2, 2);
++    jfree(j);
++}
++static void w_comments(uint64_t *regs) {   // SearchComments (while a course plays): none
++    uint64_t no = regs[0];
++    lock(no);
++    s64(no + 0x8f41c, 0); s32(no + 0xe8528, g32(no + 0x737a8)); s8(no + 0xe852c, g8(no + 0x737ac)); s8(no + 0xe852d, 1);
++    unlock(no);
++    finish(regs, no, 1, 0);
++}
++// Answers with nothing to fetch: a few writes under the lock, then success
++#define TRIVIAL(name, body) static void name(uint64_t *regs) { uint64_t no = regs[0]; lock(no); body; unlock(no); finish(regs, no, 1, 0); }
++TRIVIAL(w_ok, USE(no))                                                           // LoginCheck, UpdateLastLoginInfo, PostActivityQuest, SyncUserProfile, ReportFromBugDetection
++TRIVIAL(w_app_config, for (int i = 0; i < 38; i++) s32(no + 0x737b0 + 4 * i, 0)) // GetApplicationConfig: nothing switched on (no Endless Challenge, no Super Worlds)
++TRIVIAL(w_name_ok, s32(no + 0x141608, 0))                                        // GetUserNameNgType: the name is fine
++TRIVIAL(w_no_clothes, s32(no + 0x73a58, 0))                                      // GetMiiClothes: no costume rewards
++TRIVIAL(w_no_news, s8(no + 0xeac12, 0); s8(no + 0xeac14, 0))                     // GetNewNotification
++TRIVIAL(w_no_event, s64(no + 0x1a0810, 0); s8(no + 0x1a0818, 0); s64(no + 0x1a0820, 0); s8(no + 0x1a0828, 0))   // GetEventCourseStatus
++TRIVIAL(w_no_events, s32(no + 0x1a0808, 0))                                      // Ninji Speedruns: no events
++TRIVIAL(w_no_event_list, s64(no + 0x14161c, 0))
++TRIVIAL(w_course_info, s64(no + 0xe85ac, 0))                                     // records about a course around its start: none
++TRIVIAL(w_id_check, s32(no + 0x141604, 0))                                       // a check on an id: passes
++
++static const struct { uint32_t off; void (*fn)(uint64_t *); const char *what; } k_wrappers[] = {
++    {0x60fe20, w_login_ready, "cLogInReady"}, {0x6101d0, w_login, "cLogIn"},
++    {0x14ce2f0, w_app_config, "GetApplicationConfig"}, {0x14d5cd0, w_own_user, "GetUsers (own)"}, {0x14f2cc0, w_name_ok, "GetUserNameNgType"},
++    {0x14cef40, w_ok, "SyncUserProfile"}, {0x14d8360, w_no_clothes, "GetMiiClothes"}, {0x14d7d20, w_ok, "LoginCheck"}, {0x14d7e00, w_ok, "UpdateLastLoginInfo"},
++    {0x14f0b30, w_ok, "PostActivityQuest"}, {0x14edee0, w_no_news, "GetNewNotification"}, {0x14f3ab0, w_no_event, "GetEventCourseStatus"},
++    {0x14f3980, w_no_events, "GetEventCourseCount"}, {0x14f3770, w_no_event_list, "GetEventCourses"},
++    {0x14d8550, w_search, "SearchCourses"}, {0x14dc0d0, w_by_code, "GetUserOrCourse"}, {0x14d02d0, w_users_list, "GetUsers (list)"},
++    {0x14d7780, w_users_list, "GetUsers (list 2)"}, {0x14d2f00, w_user_page, "GetUsers (maker page)"}, {0x14d74a0, w_user_counts, "GetUsers (counts)"},
++    {0x14dbae0, w_courses_by_id, "GetCourses"}, {0x14de010, w_course_file, "GetObject (course)"}, {0x14e0e70, w_thumbnails, "pictures"},
++    {0x14ec0d0, w_course_info, "course records"}, {0x14f17a0, w_id_check, "id check"}, {0x14e8ec0, w_comments, "SearchComments"},
++    {0x14e30e0, w_play_result, "PostPlayResult"}, {0x14ebc60, w_can_rate, "CanPostRatingAndComment"}, {0x14e6b90, w_rate, "PostRatingInfo"},
++    {0x14f2910, w_ok, "ReportFromBugDetection"},
++};
++
++static void init(void) {
++    for (int i = 0; i < g_nmod; i++)
++        if (!strcmp(g_mod[i].name, "main")) { g_main = g_mod[i].base; g_ro_off = g_mod[i].ro_off; g_data_off = g_mod[i].data_off; }
++    const char *e = getenv("DM_SMM2_ONLINE");
++    g_log = getenv("DM_SMM2_LOG") && atoi(getenv("DM_SMM2_LOG"));
++    if (!g_main || strcmp(dm_main_build(), SMM2_BUILD)) { LOG("smm2 online: off (main is not Super Mario Maker 2 3.0.3)"); return; }
++    if (e && !atoi(e)) { LOG("smm2 online: off (DM_SMM2_ONLINE=0)"); return; }
++    const char *nick = getenv("DM_NICK");
++    if (nick && *nick) snprintf(g_nick, sizeof g_nick, "%s", nick);
++    g_on = 1;
++    gate_obs_set(OBS_SMM2_DOWNLOAD, obs_download);
++    pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8 << 20);   // (the server's own start: Rust, on a big stack)
++    pthread_t t;
++    if (pthread_create(&t, &a, srv_start, NULL)) srv_set(-1); else pthread_detach(t);
++    pthread_attr_destroy(&a);
++    LOG("smm2 online: on (Course World from the course server; DM_SMM2_ONLINE=0 in env.txt turns it off)");
++}
++
++// The pretend-online switch nifm and account read (hle_net.c, hle_offline.c, hle_account.c): the network is up and the player has a network
++// service account, so the game opens Course World; its requests then come here
++int dm_online(void) { pthread_once(&g_once, init); return g_on; }
++uint64_t dm_online_account_id(void) { return OWN_PID; }
++
++// svc #0x8f, cut at the entry of each wrapper (patches.py): orig = its main offset
++uint64_t smm2_svc(uint64_t *regs, uint64_t orig) {
++    dm_online();
++    for (size_t i = 0; i < sizeof k_wrappers / sizeof *k_wrappers; i++) {
++        if (k_wrappers[i].off != orig) continue;
++        if (!g_on) {   // (switched off, nifm says offline and Course World does not open; a request that comes anyway fails as not connected)
++            if (k_wrappers[i].fn != w_login_ready && k_wrappers[i].fn != w_login) { s32(regs[0] + 0x60, 1); regs[0] = g8(M(G_FAIL_BYTE)); }
++            return 0;
++        }
++        SLOG("%s", k_wrappers[i].what);
++        k_wrappers[i].fn(regs);
++        return 0;
++    }
++    LOG("[RED] smm2 online: svc 0x8f at main+%#llx, which is no Course World request", (unsigned long long)orig);
++    return 0;
++}
+diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
+index e641873b..9ee74162 100644
+--- a/dm/host/hle_svc.c
++++ b/dm/host/hle_svc.c
+@@ -500,6 +500,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
+         }
+         regs[0] = 0; regs[1] = v; return 0;
+     }
++    case 0x8f: { uint64_t smm2_svc(uint64_t *regs, uint64_t orig); return smm2_svc(regs, orig_addr); }   // Super Mario Maker 2's Course World requests (cut in its patches.py; hle_smm2_online.c, nxkit)
+     default:
+         if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (placeholder returns success)", num, regs[0], regs[1], regs[2]); }
+         regs[0] = 0; return 0;
+diff --git a/dm/ios/tools/build_ipa.sh b/dm/ios/tools/build_ipa.sh
+index 3f617388..6bc685c3 100755
+--- a/dm/ios/tools/build_ipa.sh
++++ b/dm/ios/tools/build_ipa.sh
+@@ -70,7 +70,7 @@ t "generate Gen/ (host sources, embedded modules, tables)"
+ rm -rf Gen && mkdir -p Gen/dm || die "mkdir Gen"
+ python3 tools/gen_build.py "$DM/host" Gen > Gen/dm.xcconfig || die "gen_build"
+ F=$(python3 tools/gen_embed.py "$PATCHED" Gen/embed.S $MODS) || die "gen_embed"
+-echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig
++echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F ${DM_EXTRA_LDFLAGS:-}" >> Gen/dm.xcconfig   # DM_EXTRA_LDFLAGS: libraries of a game's own (nxkit: Super Mario Maker 2's course server)
+ cp "$PATCHED"/*.fixups.tsv "$PATCHED"/*.gates.tsv "$PATCHED"/*.cuts.tsv "$PATCHED"/*.obs.tsv Gen/dm/ || die "copy rewriter tables"
+ if [ -f "$PATCHED/nro.tsv" ]; then cp "$PATCHED/nro.tsv" Gen/dm/ || die "copy the NRO table"; fi   # the NRO modules the game loads with nn::ro (hle_ro.c), embedded by gen_embed.py
+ if [ "$GFXAPI" = vulkan ] || [ "$GFXAPI" = gl ]; then cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" Gen/dm/ || die "copy shader tables"   # empty NVN tables: the NVN layer draws nothing
