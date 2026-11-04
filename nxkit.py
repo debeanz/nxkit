@@ -446,6 +446,9 @@ def game_cmd(a):
         say(f'deleting the extracted game files: {Path(info["work"]) / "extract"}'); B_rm(Path(info['work']) / 'extract')
 
 
+NO_RUNNER_TRIES = 12   # runs of a build no macOS runner takes (about 15 minutes each) before nxkit gives up
+
+
 def cloud_ipa(cfg, home, kit_enc, tag, commit, finish):
     """The cloud part of a build: uploads the encrypted kit, runs the workflow and waits for it, downloads and decrypts the slim IPA and hands it to finish(slim);
     the kit's release and the run's artifacts are deleted"""
@@ -462,7 +465,17 @@ def cloud_ipa(cfg, home, kit_enc, tag, commit, finish):
             if run_id: break
         if not run_id: raise KitError('the cloud build did not start (see the Actions tab)')
         say(f'cloud build: https://github.com/{slug}/actions/runs/{run_id}')
-        if subprocess.run(['gh', 'run', 'watch', str(run_id), '--repo', slug, '--exit-status', '--interval', '30']).returncode:
+        for attempt in range(1, NO_RUNNER_TRIES + 1):
+            if not subprocess.run(['gh', 'run', 'watch', str(run_id), '--repo', slug, '--exit-status', '--interval', '30']).returncode: break
+            # GitHub cancels a job no macOS runner took within about 15 minutes ("not acquired by Runner of type hosted": its Apple silicon runners short of
+            # capacity; 2026-11-04 every macos-26 job for hours). Nothing ran and the kit's release is still there: the same run is started again
+            jobs = json.loads(gh('api', f'repos/{slug}/actions/runs/{run_id}/jobs', capture=True))['jobs']
+            if attempt < NO_RUNNER_TRIES and jobs and all(j['conclusion'] == 'cancelled' and not j['steps'] for j in jobs):
+                say(f'no GitHub macOS runner took the build (GitHub is short of them); starting it again in a minute ({attempt} of {NO_RUNNER_TRIES - 1} retries)')
+                time.sleep(60)
+                gh('run', 'rerun', run_id, '--repo', slug)
+                time.sleep(20)
+                continue
             fetch_logs(slug, run_id, home / 'logs' / tag, cfg['password'])
             raise KitError(f'the cloud build failed: https://github.com/{slug}/actions/runs/{run_id}')
         dl = home / 'downloads' / tag; B_rm(dl)
