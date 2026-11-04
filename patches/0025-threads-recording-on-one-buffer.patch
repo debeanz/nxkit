@@ -1,0 +1,225 @@
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index ec34eced..c10edce5 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -724,12 +724,17 @@ static void cs_dump(void) {   // Called once per frame (at present)
+ static void put_hdr(uint8_t *p, uint32_t op, uint32_t size) { op_hdr h = {op, size}; memcpy(p, &h, sizeof h); if (op) cs_op(op, size); }
+ // New segment: if the recording in progress has records, write a JUMP at the end of the old segment to link it. A recording with none yet starts in the new segment
+ // (its first record is its handle), and the bytes at the old write position are not its own: after an END that took the last bytes there is no room there at all
+-static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) {
++// (nxkit 0025) Under g_cmdseg_mu (see cmd_alloc_keep). The write pointer is NULL while the segment changes, so a thread appending at that moment waits for the mutex instead of taking the bytes the JUMP goes in
++static pthread_mutex_t g_cmdseg_mu = PTHREAD_MUTEX_INITIALIZER;
++static void cmd_new_segment_locked(cmd_t *o, uint8_t *mem, size_t n) {
+     uint8_t *start = align8(mem), *end = mem + n;
+-    if (o->recording == 1 && o->cur) { if (cs_on() && o->end > o->cur) { pthread_mutex_lock(&g_cs_mu); g_cs.waste += (uint64_t)(o->end - o->cur); pthread_mutex_unlock(&g_cs_mu); } put_hdr(o->cur, OP_JUMP, 16); memcpy(o->cur + 8, &start, 8);
+-        o->used += 16; }   // the JUMP also occupies guest memory of this recording: count it in used, so the game packing the next recording right behind by used does not overwrite it
+-    o->cur = start; o->end = end;
++    uint8_t *old = __atomic_exchange_n(&o->cur, NULL, __ATOMIC_ACQUIRE);
++    if (o->recording == 1 && old && old + 16 <= o->end) { if (cs_on() && o->end > old) { pthread_mutex_lock(&g_cs_mu); g_cs.waste += (uint64_t)(o->end - old); pthread_mutex_unlock(&g_cs_mu); } put_hdr(old, OP_JUMP, 16); memcpy(old + 8, &start, 8);
++        __atomic_fetch_add(&o->used, 16, __ATOMIC_RELAXED); }   // the JUMP also occupies guest memory of this recording: count it in used, so the game packing the next recording right behind by used does not overwrite it
++    o->end = end;
++    __atomic_store_n(&o->cur, start, __ATOMIC_RELEASE);
+ }
++static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) { pthread_mutex_lock(&g_cmdseg_mu); cmd_new_segment_locked(o, mem, n); pthread_mutex_unlock(&g_cmdseg_mu); }
+ // Host-supplied segment when the game's own command memory runs out: when the game's out-of-memory callback cannot allocate from its command memory pool, it calls AddCommandMemory with an empty pool (p = NULL, n = 0)
+ // (opening the advanced stats page on the level 88 sorceress save: many list items in one frame, and the original implementation segfaulted here reading NULL+8). Our records are larger than real-device NVN commands, so the budget the game reserved for real-device usage is not necessarily enough,
+ // so this is not an error state of the game but something we must catch: provide a segment of host memory to keep recording. The segment is replayed in place at submit and reclaimed after being kept for 8 frames (submit is in the same frame as recording or the next one).
+@@ -791,23 +796,59 @@ NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemory
+     CB(c)->used = 0;   // GetCommandMemoryUsed counts from the start of the memory the game last added, across recordings (see there)
+ }
+ NVN(nvnCommandBufferAddControlMemory, void, NVNcommandBuffer *c, void *m, size_t n) { (void)c; (void)m; (void)n; }
++// (nxkit 0025) Which threads record at once on one buffer: a second thread appending inside an open recording is logged with where it came from (the first few)
++static __attribute__((noinline)) void cmd_two_writers(const cmd_t *o, uint64_t other) {
++    static _Atomic int total; int n = ++total; if (n > 12) return;
++    char me[64] = "?", them[64] = "?"; pthread_getname_np(pthread_self(), me, sizeof me); pthread_getname_np((pthread_t)other, them, sizeof them);
++    LOG("[nvn] command buffer %p: thread '%s' records inside a recording thread '%s' was writing, frame %llu (%d so far, nxkit 0025)", (const void *)o, me, them, (unsigned long long)dm_nvn_frame_count(), n);
++    dm_backtrace((uint64_t)__builtin_frame_address(0));
++}
++static inline void cmd_note_writer(cmd_t *o) {
++    uint64_t me = (uint64_t)pthread_self(), w = __atomic_load_n(&o->writer, __ATOMIC_RELAXED);
++    if (w == me) return;
++    __atomic_store_n(&o->writer, me, __ATOMIC_RELAXED);
++    if (w && o->recording) cmd_two_writers(o, w);
++}
+ // Get space for one record and keep `keep` bytes after it (OP_RESERVE, 0 for the END); if not enough, call back into the game per the NVN convention to add command memory
++// (nxkit 0025) Taking the bytes is atomic. Guest threads run in parallel here, also threads of one Switch core that never run at once on the console. Two of them recording on one buffer used to
++// read the same write pointer and write one record over the other: a CALL header from one thread with the first argument of another record, a CALL "to" 0x1 or 0x3 (Super Mario Maker 2, a crash or a
++// frozen picture after minutes of play; that two threads did this is the likely reading, the log lines of cmd_two_writers are there to show it). Now each record gets bytes of its own in whichever
++// order the threads arrive. A recording's first record and a change of segment go under g_cmdseg_mu
+ static uint8_t *cmd_alloc_keep(cmd_t *o, uint32_t size, uint32_t keep) {
+     size = (size + 7) & ~7u;
+-    for (int tries = 0; !o->cur || o->cur + size + keep > o->end; tries++) {
++    cmd_note_writer(o);
++    uint8_t *p = __atomic_load_n(&o->cur, __ATOMIC_ACQUIRE);
++    while (p && p + size + keep <= o->end && __atomic_load_n(&o->recording, __ATOMIC_RELAXED) != 2) {
++        if (__atomic_compare_exchange_n(&o->cur, &p, p + size, 1, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) goto got;
++    }
++    for (int tries = 0;; tries++) {
++        pthread_mutex_lock(&g_cmdseg_mu);
++        p = __atomic_load_n(&o->cur, __ATOMIC_ACQUIRE);
++        if (p && p + size + keep <= o->end) {
++            if (__atomic_compare_exchange_n(&o->cur, &p, p + size, 0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
++                if (o->recording == 2) { o->begin = p; o->recording = 1; }   // The recording's first record is its handle
++                pthread_mutex_unlock(&g_cmdseg_mu);
++                goto got;
++            }
++            pthread_mutex_unlock(&g_cmdseg_mu);
++            continue;
++        }
+         // The game's callback cannot supply enough (newer-SDK games hand out small chunks sized for real-device commands, or disable the callback and manage memory themselves): continue recording in a host segment instead of aborting
+-        if (!o->cb || tries == 2) {
++        if (!o->cb || tries >= 2) {
+             static int once; if (!once++) LOG("[nvn] command memory: the game's callback did not add enough (cb=%p, need %u bytes), using a host-lent segment", (void *)o->cb, size + keep);
+-            size_t sz = hostseg_size(o, 0, size + keep); cmd_new_segment(o, hostseg_take(o, sz), sz); break;
++            size_t sz = hostseg_size(o, 0, size + keep); cmd_new_segment_locked(o, hostseg_take(o, sz), sz);
++            pthread_mutex_unlock(&g_cmdseg_mu);
++            continue;
+         }
++        pthread_mutex_unlock(&g_cmdseg_mu);   // the callback is the game's code, it may take its own locks and add memory
+         if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.cbs++; pthread_mutex_unlock(&g_cs_mu); }
+         { static int cblog = -1; if (cblog < 0) cblog = getenv("DM_NVN_CBLOG") != NULL; static uint64_t ncb;
+           if (cblog && (++ncb <= 40 || ncb % 1000 == 0)) LOG("[nvn] command memory callback #%llu cmd=%p need %u (used in this segment %ld)", (unsigned long long)ncb, (void *)o, size + keep, o->cur && o->end ? (long)(o->cur - (o->end - 1)) : -1L); }
+         o->cb((NVNcommandBuffer *)o, NVN_COMMAND_BUFFER_MEMORY_EVENT_OUT_OF_COMMAND_MEMORY, size + keep, o->cb_data);
+     }
++got:
+     if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.bytes += size; g_cs.recs++; pthread_mutex_unlock(&g_cs_mu); }
+-    uint8_t *p = o->cur; o->cur += size; o->used += size; put_hdr(p, 0, size);
+-    if (o->recording == 2) { o->begin = p; o->recording = 1; }   // The recording's first record is its handle
++    __atomic_fetch_add(&o->used, size, __ATOMIC_RELAXED); put_hdr(p, 0, size);
+     return p;
+ }
+ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) { return cmd_alloc_keep(o, size, OP_RESERVE); }
+@@ -846,6 +887,7 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
+     cmd_t *o = CB(c);
+     rec_enter(o);
+     if (o->recording) LOG("[RED] BeginRecording re-entered");
++    o->writer = 0;
+     o->recording = 2;   // 2: recording, no command yet (cmd_alloc sets begin)
+ }
+ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
+@@ -858,7 +900,18 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
+ }
+ NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording != 0; }
+ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
+-    for (int i = 0; i < n; i++) { uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_CALL, 16); memcpy(p + 8, &h[i], 8); }
++    for (int i = 0; i < n; i++) {
++        uint64_t v; memcpy(&v, &h[i], 8);
++        if (v < 0x10000 || v >> 48) {   // (nxkit 0025) No command list can be there. The replay would skip it too (nvn_mtl.m cmd_target_bad); here the log tells who passed it and what lies around it
++            static _Atomic int bad; int k = ++bad;
++            if (k <= 12) { uint64_t w[5]; memcpy(w, (const uint64_t *)&h[i] - 2, sizeof w); char me[64] = "?"; pthread_getname_np(pthread_self(), me, sizeof me);
++                LOG("[RED] command lists: thread '%s' passed handle %#llx (entry %d of %d, at %p; words around it %#llx %#llx [%#llx] %#llx %#llx), skipped, frame %llu, %d so far (nxkit 0025)", me, (unsigned long long)v, i, n, (const void *)&h[i],
++                    (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3], (unsigned long long)w[4], (unsigned long long)dm_nvn_frame_count(), k);
++                dm_backtrace((uint64_t)__builtin_frame_address(0)); }
++            continue;
++        }
++        uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_CALL, 16); memcpy(p + 8, &v, 8);
++    }
+ }
+ NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
+     (void)loc; (void)flags;
+@@ -1188,12 +1241,15 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
+     ((queue_t *)q)->submits++;
+     mtl_sub_begin();
+     nvn_ft_poll();
+-    mtl_sub_index((const uint64_t *)h, n);
++    // (nxkit 0022, 0025) A handle that cannot be a command list is left out before anything walks the lists (the store lookahead below and every lookahead that reads the rest of the handles)
++    uint64_t hs[n > 0 ? n : 1]; int hn = 0;
+     for (int i = 0; i < n; i++) {
+-        uintptr_t v = (uintptr_t)h[i];   // (nxkit 0022) a handle that cannot be a command list is skipped, not replayed (nvn_mtl.m cmd_target_bad)
++        uintptr_t v = (uintptr_t)h[i];
+         if (v < 0x10000 || v >> 48) { static int bad; if (bad++ < 8) LOG("[RED] QueueSubmitCommands: handle %d of %d is %#lx, no command list; skipped (nxkit 0022)", i, n, (unsigned long)v); continue; }
+-        mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]);
++        hs[hn++] = v;
+     }
++    mtl_sub_index(hs, hn);
++    for (int i = 0; i < hn; i++) { mtl_exec_rest(hs + i + 1, hn - i - 1); mtl_exec((const uint8_t *)hs[i]); }
+     mtl_exec_rest(NULL, 0);
+     mtl_sub_commit();
+     pthread_mutex_unlock(&g_sub_mu);
+@@ -1701,7 +1757,27 @@ static void fstep_tick(const win_t *o) {
+         t0 = t; v0 = vs; memset(held, 0, sizeof held);
+     }
+ }
++// (nxkit 0025) What a log needs when the game freezes or iOS ends it: no line says so by itself. While the app is in the foreground, a picture that stops for 5 s, and again at 20 s, dumps every thread and
++// what it waits on; the memory footprint is logged when it moves by 256 MiB, once a second at most, so a kill for memory shows on the way there
++void crash_dump_now(const char *why);
++int dm_focus_now(void);
++static void *stall_main(void *arg) {
++    (void)arg; pthread_setname_np("nvn stall log"); uint64_t seen = 0; int still = 0, dumps = 0; unsigned long long logged = 0;
++    for (;;) {
++        sleep(1);
++        task_vm_info_data_t vi; mach_msg_type_number_t vc = TASK_VM_INFO_COUNT;
++        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &vc) == KERN_SUCCESS) { unsigned long long mb = (unsigned long long)(vi.phys_footprint >> 20);
++            if (mb >= logged + 256 || mb + 256 <= logged) { logged = mb; LOG("[nvn] memory footprint %llu MiB at frame %llu (nxkit 0025)", mb, (unsigned long long)dm_nvn_frame_count()); } }
++        uint64_t f = dm_nvn_frame_count();
++        if (f != seen || dm_focus_now() != 1) { seen = f; still = 0; continue; }
++        still++;
++        if ((still == 5 || still == 20) && dumps < 6) { dumps++; char why[64]; snprintf(why, sizeof why, "no new frame for %d s at frame %llu, nxkit 0025", still, (unsigned long long)f); crash_dump_now(why); }
++    }
++    return NULL;
++}
++static void stall_start(void) { pthread_t t; if (!pthread_create(&t, NULL, stall_main, NULL)) pthread_detach(t); }
+ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
++    { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, stall_start); }
+     (void)q; win_t *o = (win_t *)w; o->presents++;
+     dm_fps_lock_tick();
+     if (dm_fps_state) { static int was; int c = fps_step_cap(); if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? " (prerendered movie)" : ""); was = c; } }
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 1b127983..d41f9ba7 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -5774,8 +5774,10 @@ static int rec_bad(const op_hdr *h, const void *rec) {
+ static int cmd_target_bad(const void *t, const char *what, const void *rec) {
+     uintptr_t v = (uintptr_t)t;
+     if (v >= 0x10000 && !(v >> 48)) return 0;
+-    static int n; if (n++ < 8) MLOG("[RED] command lists: a %s record at %p points at %p, which is no command list (overwritten: a recording whose memory was reused?); skipped, %d so far (nxkit 0022)",
+-                                    what, (const uint8_t *)rec - 8, t, n);
++    static int n; if (n++ < 8) { MLOG("[RED] command lists: a %s record at %p points at %p, which is no command list (overwritten: a recording whose memory was reused?); skipped, %d so far (nxkit 0022)",
++                                      what, (const uint8_t *)rec - 8, t, n);
++        const uint64_t *w = rec; if (((uintptr_t)rec & 0xfff) >= 32 && ((uintptr_t)rec & 0xfff) < 0xfe0)   // (nxkit 0025) what lies around it, inside this page
++            MLOG("[nvn] words around it: %#llx %#llx %#llx [%#llx] %#llx %#llx %#llx", (unsigned long long)w[-3], (unsigned long long)w[-2], (unsigned long long)w[-1], (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3]); }
+     return 1;
+ }
+ void mtl_exec_rest(const uint64_t *h, int n) { g_rest = h; g_nrest = n; }
+@@ -6321,6 +6323,8 @@ static void sdx_walk(const uint8_t *p, int depth) {
+     for (uint32_t guard = 0; guard < 4000000 && p && g_sdx_ok; guard++) {
+         op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
+         if (rec_bad(&h, p)) return;
++        // (nxkit 0025) Lists that call themselves (overwritten ones) would multiply at every depth and fill the memory until iOS ends the app, with nothing in the log. A frame has far fewer records
++        if (g_sdx_nop >= 8000000) { static int once; if (!once++) MLOG("[RED] command lists: over %u records in one submission, the lists must call themselves; the store lookahead gives up on it (nxkit 0025)", g_sdx_nop); g_sdx_ok = 0; return; }
+         if (g_sdx_nop == g_sdx_opcap) { g_sdx_opcap = g_sdx_opcap ? g_sdx_opcap * 2 : 16384; g_sdx_op = realloc(g_sdx_op, g_sdx_opcap * sizeof *g_sdx_op); }
+         uint32_t seq = g_sdx_nop; g_sdx_op[g_sdx_nop++] = p;
+         switch (h.op) {
+@@ -8694,6 +8698,7 @@ void mtl_exec(const uint8_t *p) {
+     static int inited; if (!inited) { inited = 1; state_reset(); }
+     static int dump_all = -1; if (dump_all < 0) dump_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;
+     int trace = dump_all && passdump();   // Normal mode does not check the frame range per operation; the full command position is only used for the designated diagnostic frames
++    uint32_t jumps = 0;
+     for (;;) {
+         op_hdr h; memcpy(&h, p, sizeof h);
+         if (rec_bad(&h, p)) { h.op = OP_END; h.size = 8; }   // (nxkit 0024) ends this list as its END would
+@@ -8715,8 +8720,11 @@ void mtl_exec(const uint8_t *p) {
+                 }
+                 return;   // An end-of-pass triggered outside a list (present / CPU readback etc.) must not scan expired command memory: a null start point means store everything
+             case OP_BEGIN: break;
+-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) { g_exec_cur = NULL; return; } p = t; continue; }
++            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); if (cmd_target_bad(t, "JUMP", a)) { g_exec_cur = NULL; return; }
++                if (++jumps > (1u << 20)) { static int once; if (!once++) MLOG("[RED] command lists: JUMP records go in a circle at %p; the list ends there (nxkit 0025)", p); g_exec_cur = NULL; return; }
++                p = t; continue; }
+             case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (cmd_target_bad((const void *)t, "CALL", a)) break;
++                if (g_ret_n >= 64) { static int once; if (!once++) MLOG("[RED] command lists: CALL records nest over 64 deep at %p, the lists must call themselves; skipped (nxkit 0025)", p); break; }
+                 if (g_ret_n < 16) g_ret[g_ret_n] = p + h.size; g_ret_n++;   // Return stack for lookahead: after a sub-list ends, continue looking at the caller
+                 mtl_exec((const uint8_t *)t); g_ret_n--; break; }
+             case OP_SIGNAL_EVENT: { volatile uint32_t *val; uint32_t m, v; memcpy(&val, a, 8); memcpy(&m, (const uint8_t *)a + 8, 4); memcpy(&v, (const uint8_t *)a + 12, 4);
+diff --git a/dm/gfx/nvn/nvn_obj.h b/dm/gfx/nvn/nvn_obj.h
+index 922dbc9c..ad908c67 100644
+--- a/dm/gfx/nvn/nvn_obj.h
++++ b/dm/gfx/nvn/nvn_obj.h
+@@ -75,6 +75,7 @@ typedef struct {
+     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
+     NVNdevice *dev;
+     uint64_t used;                       // Bytes written since the game last added command memory, across recordings and host segments, including segment-switch JUMPs (returned by GetCommandMemoryUsed)
++    uint64_t writer;                     // (nxkit 0025) The thread that last took bytes in this recording (hle_nvn.c cmd_note_writer)
+     int32_t tex_base, samp_base;         // Host-table bases of the texture / sampler pool this command buffer last bound (hle_nvn.c dpool_add; 0 = the first pool of its kind)
+ } cmd_t;                                                                                   FITS(cmd_t, NVNcommandBuffer);
+ 
