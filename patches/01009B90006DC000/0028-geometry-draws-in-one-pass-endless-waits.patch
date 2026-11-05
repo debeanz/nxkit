@@ -1,0 +1,171 @@
+diff --git a/dm/games/game.py b/dm/games/game.py
+index 008de69f..6c1adfdc 100644
+--- a/dm/games/game.py
++++ b/dm/games/game.py
+@@ -122,6 +122,8 @@ def header(g):
+     sko, skl = (int(m[1], 0), int(m[2], 0)) if m else (0, 0)
+     rtc = g.get('rt_continue', 'off')   # SetRenderTargets to the targets already set continues the render pass unless a barrier let a draw read them (nvn_mtl.m rt_cont_on): on / off
+     if rtc not in ('on', 'off'): sys.exit(f'{g.id}: rt_continue must be on or off: {rtc}')
++    gqu = g.get('geo_batch', 'off')   # geometry-shader draws on one set of targets: their compute steps first, then one render pass for all of them (nvn_geometry.inc geo_q_on): on / off
++    if gqu not in ('on', 'off'): sys.exit(f'{g.id}: geo_batch must be on or off: {gqu}')
+     rcd = g.get('render_cond', 'off')   # NVN conditional rendering evaluated at replay, timestamp reports with counter 0 (nvn_mtl.m OP_RENDER_COND): on / off
+     if rcd not in ('on', 'off'): sys.exit(f'{g.id}: render_cond must be on or off: {rcd}')
+     tfu = g.get('tex_flush_upload', 'off')   # textures written by the CPU into a pool and published with nvnMemoryPoolFlushMappedRange are uploaded like packaged ones (hle_nvn.c): on / off
+@@ -179,6 +181,7 @@ def header(g):
+          f'#define DM_GAME_SHADER_KEY_SKIP_OFF {sko:#x}', f'#define DM_GAME_SHADER_KEY_SKIP_LEN {skl:#x}',
+          f'#define DM_GAME_RENDER_COND {int(rcd == "on")}',
+          f'#define DM_GAME_RT_CONTINUE {int(rtc == "on")}',
++         f'#define DM_GAME_GEO_BATCH {int(gqu == "on")}',
+          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
+          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
+          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index fa81039b..28b5b51a 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1489,7 +1489,8 @@ static void power_line(uint64_t frame) {
+         void mtl_ubp_why(uint64_t w[5]); static uint64_t pw5[5]; uint64_t w5[5]; mtl_ubp_why(w5);
+         uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
+         { void mtl_rtc_stats(uint64_t *, uint64_t *, uint64_t *); void dm_gfx_passdump_next(long); static uint64_t pm_, pb_, po_; static int dumped; uint64_t m_, b_, o_; mtl_rtc_stats(&m_, &b_, &o_);   // (nxkit 0027)
+-          LOG("[nvn] render targets set up to frame %llu, per frame: the same again, pass goes on %.1f / kept apart by a barrier %.1f; other targets %.1f (nxkit 0027)", (unsigned long long)frame, (m_ - pm_) / nf, (b_ - pb_) / nf, (o_ - po_) / nf); pm_ = m_; pb_ = b_; po_ = o_;
++          void mtl_geo_q_stats(uint64_t *, uint64_t *); static uint64_t pgd, pgr; uint64_t gd, gr; mtl_geo_q_stats(&gd, &gr);
++          LOG("[nvn] render targets set up to frame %llu, per frame: the same again, pass goes on %.1f / kept apart by a barrier %.1f; other targets %.1f (nxkit 0027); geometry draws %.1f in %.1f batches (nxkit 0028)", (unsigned long long)frame, (m_ - pm_) / nf, (b_ - pb_) / nf, (o_ - po_) / nf, (gd - pgd) / nf, (gr - pgr) / nf); pm_ = m_; pb_ = b_; po_ = o_; pgd = gd; pgr = gr;
+           if (!dumped && (fu - pfu) / nf >= 60) { dumped = 1; LOG("[nvn] %.0f load-all store-all passes a frame: the next frame's passes follow in the log, once (nxkit 0027)", (fu - pfu) / nf); dm_gfx_passdump_next(1); } }
+         LOG("[nvn] residency set up to frame %llu: %s; draw-pass entry barriers full %llu / saved %llu; split submits %llu (%llu after buffer → texture copies); passes broken by copies / buffer updates %llu; in-pass uniform updates deferred %llu, passes ended to land them for a read %llu, partly covered blocks read from memory %llu (cached %llu, refused %llu: other GPU writes %llu, earlier submission running %llu, copy or fill queued %llu, size %llu, unreadable %llu); waiting clears taken by a later pass %llu, landed in passes of their own %llu; "
+             "attachments per frame load %.0f MB / store %.0f MB, load-all store-all passes %.0f, saved by not storing unwritten attachments %.1f MB", frame, rs, (unsigned long long)(bf - pbf), (unsigned long long)(bs - pbs),
+diff --git a/dm/gfx/nvn/nvn_geometry.inc b/dm/gfx/nvn/nvn_geometry.inc
+index 7ec2a3a5..fe0e0574 100644
+--- a/dm/gfx/nvn/nvn_geometry.inc
++++ b/dm/gfx/nvn/nvn_geometry.inc
+@@ -136,6 +136,42 @@ static int geo_split(NvProg *pr, const p_draw *dw, const p_draw_idx *di, int cou
+     g_geo_split_depth--;
+     return 1;
+ }
++// (nxkit 0028, profile key geo_batch) Batched geometry draws. A geometry draw needs compute work before it rasterizes, and compute can't run inside a render pass, so each one ended the pass and opened another:
++// a load and store of all attachments per draw. Super Mario Maker 2's Block_Proc shader (one triangle in, a quad out, used for the blocks of Ghost House courses) draws 46 times a frame on two 1152x648
++// target pairs: 380 MB a frame, the bulk of its 20 ms of GPU time. Now the compute step runs where the draw stands and the rasterizing draw waits, with the state it saw, in a queue; anything that could
++// see the targets or the memory these draws read (a clear, a copy, a uniform update, a barrier, another draw, other targets, the end of the submission) first draws the queue, in order, in one pass.
++// A compute step moved ahead of the rasterizing of earlier draws is safe: it writes only its own scratch, and what it reads can't change while the queue holds, as what writes it draws the queue first.
++// DM_NVN_GEO_BATCH=0 / 1 overrides the key
++enum { GEO_Q_MAX = 128 };
++typedef struct { typeof(S) s; typeof(R.sc) sc; int has_sc; __unsafe_unretained NvProg *raster; uint64_t indices, index_bytes, args; uint64_t bind[5]; p_draw syn; } geo_q_ent;
++static geo_q_ent *g_geo_q; static int g_geo_qn; static uint64_t g_geo_q_draws, g_geo_q_runs;
++static int geo_q_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_GEO_BATCH"); v = e ? atoi(e) != 0 : DM_GAME_GEO_BATCH; if (v && !(g_geo_q = malloc(sizeof *g_geo_q * GEO_Q_MAX))) v = 0; } return v; }
++void mtl_geo_q_stats(uint64_t *draws, uint64_t *runs) { *draws = g_geo_q_draws; *runs = g_geo_q_runs; }
++static void geo_q_flush(void) {
++    int n = g_geo_qn; if (!n) return;
++    g_geo_qn = 0; g_geo_q_runs++; g_geo_q_draws += (uint64_t)n;
++    static typeof(S) now; memcpy(&now, &S, sizeof S);
++    typeof(R.sc) sc0 = R.sc; int has_sc0 = R.has_sc, pso_dirty = g_pso_dirty, dss_dirty = g_dss_dirty;
++    for (int i = 0; i < n; i++) { geo_q_ent *e = &g_geo_q[i];
++        memcpy(&S, &e->s, sizeof S); R.sc = e->sc; R.has_sc = e->has_sc; g_pso_dirty = g_dss_dirty = 1; prog_resolve(); args_dirty_all(); g_enc_pso = nil; g_enc_dss = nil; g_ed.ok = 0;
++        memcpy(g_geo_bind, e->bind, sizeof e->bind);
++        g_geo_program = e->raster; g_geo_indices = e->indices; g_geo_index_bytes = e->index_bytes; g_geo_args = e->args;
++        draw(&e->syn, NULL);
++        g_geo_program = nil;
++        if (g_enc) g_rt_merged = 1;   // from here on a draw that samples an attachment ends the pass first, as in a continued pass
++    }
++    memcpy(&S, &now, sizeof S); R.sc = sc0; R.has_sc = has_sc0; g_pso_dirty = pso_dirty; g_dss_dirty = dss_dirty; prog_resolve(); args_dirty_all(); g_enc_pso = nil; g_enc_dss = nil; g_ed.ok = 0;
++}
++static int geo_keeps(uint32_t op) {   // the operations a queue of geometry draws waits through (see above; OP_SET_RT: its case in mtl_exec; the draws: draw())
++    switch (op) {
++        case OP_SET_RT: case OP_DRAW: case OP_DRAW_IDX: case OP_BEGIN: case OP_JUMP: case OP_CALL: case OP_END:
++        case OP_SCISSOR: case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF: case OP_BIND_VBUF1:
++        case OP_BIND_UBO: case OP_BIND_UBO_SMALL: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_STENCIL:
++        case OP_POLY_OFFSET: case OP_VIEWPORTS: case OP_DEPTH_RANGE: case OP_DEPTH_CLAMP: case OP_VP_SWIZZLE: case OP_BLEND_COLOR: case OP_COPY_STRIDE:
++        case OP_PRIM_RESTART: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: return 1;
++        default: return 0;
++    }
++}
+ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
+     NvShader *vs = pr->sh[0], *base = pr->sh[2];
+     if (!vs || !vs->geo_fn || !base || !base->geo_vertices || pr->sh[3] || pr->sh[4] || S.tf_on) {
+@@ -144,8 +180,12 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
+     p_draw dw = dw0 ? *dw0 : (p_draw){0}; p_draw_idx di = di0 ? *di0 : (p_draw_idx){0};
+     if (di0 && (di.itype < 0 || di.itype > 2)) { MLOG("[RED] geometry index type %d is invalid", di.itype); return; }
+     uint64_t ind = dw0 ? dw.ind : di.ind;
+-    if (defer_has_active()) defer_fallback();
+-    lc_land(); rp_flush(); rp_end(); ubd_land();
++    if (g_geo_qn == GEO_Q_MAX) geo_q_flush();
++    if (!g_geo_qn) {   // (with draws queued no pass is open, and their pass takes clears still pending as its load actions)
++        if (defer_has_active()) defer_fallback();
++        lc_land(); if (!geo_q_on() || g_enc) rp_flush(); rp_end();
++    }
++    ubd_land();
+     int drained = g_geo_split_depth != 0;
+     // Decode indirect arguments only after their CPU snapshot is safe. They
+     // select the index range checked below; no GPU work is encoded between the
+@@ -269,6 +309,13 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
+     }
+     g_geo_program = raster; g_geo_indices = packed; g_geo_index_bytes = packed_size; g_geo_args = args;
+     p_draw synthetic = {.prim = gs->geo_output == 1 ? 0 : gs->geo_output == 6 ? 1 : 4, .count = 3, .instances = 1, .base_instance = (int32_t)first_instance};
++    if (geo_q_on()) {
++        geo_q_ent *e = &g_geo_q[g_geo_qn++];
++        memcpy(&e->s, &S, sizeof S); e->sc = R.sc; e->has_sc = R.has_sc; e->raster = raster; e->indices = packed; e->index_bytes = packed_size; e->args = args; e->syn = synthetic;
++        memcpy(e->bind, g_geo_bind, sizeof e->bind);
++        g_geo_program = nil; args_dirty_all();
++        return;
++    }
+     draw(&synthetic, NULL);
+     g_geo_program = nil; args_dirty_all();
+     static int once; if (!once++) MLOG("geometry compute: vertex %s, geometry %s, %llu input primitives, %d instances", vs->key, gs->key, (unsigned long long)np, instances);
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index d42fbb5d..b5c4477b 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -1272,7 +1272,9 @@ int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
+ static void rp_flush(void);
+ static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before mtl_exec)
+ static void lc_land(void);
++static void geo_q_flush(void);
+ uint64_t mtl_sub_commit(void) {
++    geo_q_flush();   // (nxkit 0028) geometry draws still waiting
+     lc_land();   // clears still waiting (the command list ends with them)
+     defer_fallback();   // Deferred merged pass: at the end of the submission there are still P draws not replayed (the normal path never gets here)
+     rp_flush(); ubd_land();
+@@ -7802,6 +7804,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
+             geo_draw(geometry_program, dw, di); return;
+         }
+     }
++    if (g_geo_qn && !g_geo_program) geo_q_flush();   // (nxkit 0028) another draw: the geometry draws before it first
+     int mdx_on = (dw && dw->mdi_cnt) || (di && di->mdi_cnt) ? mdx_wanted(dw, di) : 0;   // an indirect-count multi-draw's record masked on the GPU (mdx_run), else read after a wait
+     if (!mdx_on && ((di && di->mdi_cnt && !mdi_live(di->mdi_cnt, di->mdi_i)) || (dw && dw->mdi_cnt && !mdi_live(dw->mdi_cnt, dw->mdi_i)))) return;   // past the multi-draw's count
+     if (mdx_on && mdx_next(dw, di)) return;   // the next draw of a masked multi-draw: only the draw is encoded
+@@ -8720,6 +8723,7 @@ void mtl_exec(const uint8_t *p) {
+         if (g_allocprof) { static uint64_t last; static int prev = -1; uint64_t now = g_dev.currentAllocatedSize; if (prev >= 0 && prev < 64 && now > last) g_ap_bytes[prev] += now - last; last = now; prev = h.op; }
+         if (g_hoist_n && hoist_take(p)) { if (g_fz.active && p == g_fz.rt2_op) { g_fz.phase = 2; g_rt_merged = 0; PD("F %llu merged pass enters the later pass's draws", g_stat_pass); } p += h.size; continue; }   // A pure-clear render pass already executed early / the start of a later pass already merged in   // Entering the later pass: the same-target continuation of the earlier pass ends here; the later pass reading the earlier pass's attachment is proven to be same-pixel by fz_p2_draw, and is no longer split by the continuation rule
+         const void *a = p + 8;
++        if (g_geo_qn && !geo_keeps(h.op)) geo_q_flush();   // (nxkit 0028)
+         if (g_nlc && !lc_keeps(h.op) && !(h.op == OP_END && g_ret_n)) lc_land();   // see lc_keeps (a sub-list's end returns to its caller)
+         switch (h.op) {
+             case OP_END: g_exec_cur = NULL;
+@@ -8771,6 +8775,7 @@ void mtl_exec(const uint8_t *p) {
+                    n >= 4 ? ((const float *)((const uint8_t *)a + 16))[0] : 0.f, n >= 8 ? ((const float *)((const uint8_t *)a + 16))[1] : 0.f, n >= 12 ? ((const float *)((const uint8_t *)a + 16))[2] : 0.f, n >= 16 ? ((const float *)((const uint8_t *)a + 16))[3] : 0.f); mtl_sub_update((const uint8_t *)a + 16, d, n); break; }
+             case OP_SET_RT: {
+                 const p_set_rt *r = a;
++                if (g_geo_qn) { if (rt_same(&R.rt, r)) { R.rt = *r; break; } geo_q_flush(); }   // (nxkit 0028)
+                 if (defer_begin_q(p)) break;
+                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
+                 if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
+diff --git a/dm/host/hle_smm2_online.c b/dm/host/hle_smm2_online.c
+index e1b8ff2a..e1c6752b 100644
+--- a/dm/host/hle_smm2_online.c
++++ b/dm/host/hle_smm2_online.c
+@@ -950,7 +950,16 @@ static void w_endless_rank(uint64_t *regs) {   // GetEndlessModeRank: the player
+ static void w_endless_search(uint64_t *regs) {   // SearchCourses type 14: the run's next courses. The first batch of a difficulty is gathered from TGRCode, about a minute (this is the game's network thread, it waits)
+     uint64_t no = regs[0]; uint32_t d = e_diff(no, 0x746ec);
+     char path[64]; snprintf(path, sizeof path, "/api/endless/%s/next?count=10&ruleset=smm2", ENDLESS_DIFF[d]);
+-    J *j = srv_json("GET", path, NULL, 180000, NULL);
++    // A run's first list on a phone that holds few courses: New Game told the server to fetch from TGRCode, which allows about one request in 6 s, and until the first course is in the answer is an empty
++    // list (the game: "communication error"). The first list of a difficulty is a wait on the real service too, so this waits, up to about as long as the game's own network code would
++    J *j = NULL;
++    for (int waited = 0;; waited += 3) {
++        j = srv_json("GET", path, NULL, 15000, NULL);
++        if (!j || jlen(jget(j, "courses")) > 0 || waited >= 170) break;
++        if (waited % 30 == 0) LOG("smm2 online: Endless course list (%s): the course server is gathering courses, %d s so far", ENDLESS_DIFF[d], waited);
++        jfree(j); j = NULL;
++        sleep(3);
++    }
+     if (!j) { LOG("smm2 online: Endless course list (%s): no answer", ENDLESS_DIFF[d]); finish(regs, no, 0, 2); return; }
+     lock(no);
+     uint32_t n = courses_into_ring(no, jget(j, "courses"), 4, NULL, NULL);
