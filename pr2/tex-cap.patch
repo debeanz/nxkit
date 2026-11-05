@@ -189,7 +189,7 @@ index 7657d5c..1ced346 100644
          // A level count past the texture's levels is cut to those it has, as deko3d's Tegra descriptor writer clips the maximum level (Echoes of Wisdom: levels 1 + 7 of a seven-level texture,
          // which Metal's validation refuses)
 diff --git a/dm/host/hle_thread.c b/dm/host/hle_thread.c
-index e77c9e6..83b5b03 100644
+index e77c9e6..7a01aac 100644
 --- a/dm/host/hle_thread.c
 +++ b/dm/host/hle_thread.c
 @@ -489,7 +489,7 @@ static void *hitch_main(void *arg) {
@@ -197,7 +197,7 @@ index e77c9e6..83b5b03 100644
      extern uint64_t g_t0_ns;
      static hitch_t hs[256];
 -    while (n < 24) {
-+    while (n < 48) {
++    while (n < 16) {
          { struct timespec ts = {0, 2000000}; nanosleep(&ts, 0); }
          uint64_t p = atomic_load(&dm_present_ns), now = now_ns();
          if (!p || p == seen || now - p < lim || now - g_t0_ns < skip) continue;

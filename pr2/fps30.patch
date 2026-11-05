@@ -1,9 +1,9 @@
 diff --git a/dm/games/0400C3F00006E000/patches.py b/dm/games/0400C3F00006E000/patches.py
 new file mode 100644
-index 0000000..e426106
+index 0000000..1a0c730
 --- /dev/null
 +++ b/dm/games/0400C3F00006E000/patches.py
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,16 @@
 +# Mario Kart World (0400C3F00006E000): the rewriter's patches of this game's own builds. dm/tools/patch_nso.py loads every profile's patches.py and applies those of a module's NSO build ID.
 +CUTS = {
 +  # nxkit (fps30.patch): a steady 30 fps. The framework's frame function (main+0x3a9e28) hands framework +0x214, the interval of the frame, to nvnWindowSetPresentInterval (main+0x3aa0a0), and it
@@ -12,5 +12,11 @@ index 0000000..e426106
 +  # path, so the game's speed stays right; the host follows, and after a second at interval 2 its display link runs at 30 Hz (nvn_game_fps)
 +  '9e244438c3d8ef1c703a6a85ef99c4f0': [
 +    (0x3a9ec8, '681242b9', '48008052', 'fixed present interval 2, 30 fps: ldr w8,[x19,#0x210] -> mov w8,#2'),
++    # nxkit: no texture compaction. agl::TextureDataMgr's per-frame update (main+0x523ca4) sends its "aglTextureDataMgr::Compaction" thread (body main+0xe2c028) message 100 each frame, and that thread
++    # moves texture data inside the 2.4 GB texture heap (main+0x4f96a8: memcpy, up to megabytes at a time, seen copying 3.5 MB in log.prev(14)). On a console that is RAM to RAM. Here the guest
++    # memory is a file on an 8 GB phone: the source is mostly out on flash, so each move reads it back and dirties new pages, and each moved texture is a new texture to upload (log.prev(14): 25-50 MB/s of
++    # page-ins, 150,000 write-protection faults, 17,000 first uploads in five minutes, 39 of 48 stalls with threads stopped in page faults). Without the message the heap's state stays 3, its idle
++    # state from the constructor (main+0xccf404), which the update's low-memory path needs (main+0x523d54). What it can cost: a fragmented heap in a long session, where the game's retry thread takes over
++    (0x523d00, '88010034', '0c000014', 'no compaction: cbz w8,#0x523d30 -> b #0x523d30, message 100 is never sent'),
 +  ],
 +}

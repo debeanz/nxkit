@@ -1,10 +1,10 @@
 # The Mac part of a Mario Kart World build with Plumber Racer 2 (cheemu21/plumber-racer-2, nxnative with Mario Kart World on the iPhone): runs on a push to the pr2-ipa branch, after the
 # PC attached its input encrypted (release pr2-ipa-kit, AES-256-GCM with the KIT_PASSWORD secret, as nxkit's build kits, in parts under the 2 GB asset limit; deleted as soon as it is
-# downloaded): the dump's ExeFS and the RomFS folders the build reads (Shader, Lib, Effect, Layout, UI, System), and the shader cache of an earlier run when there is one. Plumber Racer 2 is checked
+# downloaded): the dump's ExeFS and the RomFS folders the build reads (Shader, Lib, Effect, Layout, UI, System). Plumber Racer 2 is checked
 # out at PR2_REF with nxkit's display options (pr2/display-options.patch: launcher Resolution and Screen Scaling) and memory parts (pr2/mem-anon.patch: with mem_file, the alias
 # region, the stacks and the first 512 MB of the heap stay anonymous memory, DM_MEM_ANON; a "[mem] watch" log line every 10 s), texture cap (pr2/tex-cap.patch: soft textures' longest side at most
 # 512, DM_NVN_TEX_CAP, and the dropped levels' pages go back from the file) and a fixed 30 fps (pr2/fps30.patch), with the diagnostic switches of pr2/env.txt, then its NSP script builds the IPA without the game files
-# (--romfs separate). Output, encrypted: the slim IPA as the artifact "ipa" (the PC adds the whole RomFS image and deletes the artifacts), the shader cache as "shaders", or the
+# (--romfs separate). Output, encrypted: the slim IPA as the artifact "ipa" (the PC puts it into the whole IPA and deletes the artifacts), the shader cache as the kept release pr2-shaders-<PR2_REF>, or the
 # build logs as "logs".
 name: PR2 IPA
 run-name: pr2 ipa ${{ github.sha }}
@@ -87,6 +87,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/game"; tar -xf "$RUNNER_TEMP/kit.tar" -C "$RUNNER_TEMP/game"; rm "$RUNNER_TEMP/kit.tar"
           ls "$RUNNER_TEMP/game" "$RUNNER_TEMP/game/base/exefs"; du -sh "$RUNNER_TEMP/game"; df -h "$RUNNER_TEMP" | tail -1
 
+      # The shader cache is kept on GitHub, encrypted, as the release pr2-shaders-<PR2_REF>: building the 11,561 shaders is 80 of a run's 85 minutes. Without it the run builds them and makes it
+      - name: Restore the shader cache
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+        run: |
+          T="pr2-shaders-${PR2_REF:0:12}"
+          if gh release view "$T" > /dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/sc"; gh release download "$T" --pattern 'pr2-shaders.nxk.*' --dir "$RUNNER_TEMP/sc"
+            cat $(ls "$RUNNER_TEMP"/sc/pr2-shaders.nxk.* | sort) > "$RUNNER_TEMP/sc.nxk"; rm -rf "$RUNNER_TEMP/sc"
+            python nxkit/nxkit.py decrypt "$RUNNER_TEMP/sc.nxk" "$RUNNER_TEMP/sc.tar"; rm "$RUNNER_TEMP/sc.nxk"
+            mkdir -p "$RUNNER_TEMP/game/0400C3F00006E000_build"; tar -xf "$RUNNER_TEMP/sc.tar" -C "$RUNNER_TEMP/game/0400C3F00006E000_build"; rm "$RUNNER_TEMP/sc.tar"
+            echo "SHADER_CACHE=hit" >> "$GITHUB_ENV"; du -sh "$RUNNER_TEMP/game/0400C3F00006E000_build/shader"
+          else echo "no shader cache yet (release $T): every shader is built, and the result is kept there"; fi
+
       - name: Build the IPA without the game files
         run: |
           cd pr2
@@ -94,14 +111,20 @@ jobs:
           ls -l "$RUNNER_TEMP/slim.ipa" 2>/dev/null || true
           exit $rc
 
-      - name: Encrypt the IPA and the shader cache
+      - name: Encrypt the IPA, and keep a new shader cache on GitHub
         env:
           KIT_PASSWORD: ${{ secrets.KIT_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           python nxkit/nxkit.py encrypt "$RUNNER_TEMP/slim.ipa" "$RUNNER_TEMP/out/slim.ipa.nxk"
           B="$RUNNER_TEMP/game/0400C3F00006E000_build"
-          if [ -d "$B/shader" ]; then tar -cf "$RUNNER_TEMP/shaders.tar" -C "$B" shader; python nxkit/nxkit.py encrypt "$RUNNER_TEMP/shaders.tar" "$RUNNER_TEMP/out/shaders.tar.nxk"; rm "$RUNNER_TEMP/shaders.tar"; fi
+          if [ -d "$B/shader" ] && [ "${SHADER_CACHE:-}" != hit ]; then
+            tar -cf "$RUNNER_TEMP/shaders.tar" -C "$B" shader; mkdir -p "$RUNNER_TEMP/sc"; python nxkit/nxkit.py encrypt "$RUNNER_TEMP/shaders.tar" "$RUNNER_TEMP/sc/shaders.tar.nxk"; rm "$RUNNER_TEMP/shaders.tar"
+            T="pr2-shaders-${PR2_REF:0:12}"; (cd "$RUNNER_TEMP/sc" && split -b 1900m -a 2 shaders.tar.nxk pr2-shaders.nxk. && rm shaders.tar.nxk && gh release create "$T" pr2-shaders.nxk.* --prerelease --title "$T" --notes "Encrypted shader cache of the pr2-ipa workflow.") || echo "::warning::the shader cache was not kept"
+            rm -rf "$RUNNER_TEMP/sc"
+          fi
           ls -lh "$RUNNER_TEMP/out"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -110,14 +133,6 @@ jobs:
           path: ${{ runner.temp }}/out/slim.ipa.nxk
           compression-level: 0
           retention-days: 1
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: shaders
-          path: ${{ runner.temp }}/out/shaders.tar.nxk
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: ignore
 
       - name: Encrypt the build logs
         if: failure()
