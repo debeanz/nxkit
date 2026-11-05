@@ -1,0 +1,14 @@
+diff --git a/dm/gfx/tools/dmsh_mtlcache.py b/dm/gfx/tools/dmsh_mtlcache.py
+index 9e7efbc..0ec475c 100644
+--- a/dm/gfx/tools/dmsh_mtlcache.py
++++ b/dm/gfx/tools/dmsh_mtlcache.py
+@@ -31,6 +31,9 @@ class Cache:
+         """targets: {name: (sdk, record, compile)}, compile(msl, air, lib) as ios_metal.compile; work: a folder for temporary .air files"""
+         self.root, self.targets, self.work = root, targets, work
+         self.ident = {t: hashlib.sha256(FORMAT + b'\0' + rec.encode() + b'\0' + compiler_id(sdk).encode()).digest() for t, (sdk, rec, _) in targets.items()}
++        # nxkit (shader-cache.patch): with this Metal compiler the iPhone identity is the one the cloud cache's libraries were compiled under (release pr2-shaders-<PR2_REF>). compiler_id holds the SDK's build, and GitHub's image moved
++        # Xcode 27.2 from 27B48 to 27B52 with the same compiler: round 5 compiled all 11,561 shaders again, 88 minutes, into byte-identical libraries. A build with another compiler stops at own_compilers.py --check-metal (dmsh_chain.lock)
++        if 'ios' in targets and compiler_id('iphoneos').startswith('Apple metal version 32023.922 (metalfe-32023.922.4)\n'): self.ident['ios'] = bytes.fromhex('5daf850428dd97aa2338dfb1c77c0dee1c7354709031f2d98e494c918dd33283')
+         self.stats, self.lock = collections.Counter(), threading.Lock()
+ 
+     def path(self, target, src):
